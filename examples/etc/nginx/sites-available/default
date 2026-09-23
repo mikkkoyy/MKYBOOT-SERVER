@@ -1,4 +1,4 @@
-server {
+﻿server {
         listen 8888 default_server;
         listen [::]:8888 default_server;
 
@@ -22,7 +22,7 @@ server {
         server_name _;
           location / {
             default_type 'text/html';
-            content_by_lua_file /srv/nsboot/modules/nsbctl.lua;
+            content_by_lua_file /srv/mkyboot/modules/mkyctl.lua;
 
             # Отключим кэширование кода для разработки
             # (это нужно закомментировать, когда выкатим на продакшн)

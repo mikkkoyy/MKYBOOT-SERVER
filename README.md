@@ -1,4 +1,4 @@
-# NSBoot v4.0.0
+﻿# MKYBOOT v4.0.0
 
 Diskless boot Windows/Linux - Free Alternative to CCBoot
 
@@ -39,15 +39,15 @@ apt install -y etherwake shellinabox qemu-utils lua-json lua-socket lua-posix ng
 
 ```bash
 # Create ZFS pool (adjust disks for your hardware)
-sudo zpool create -m /srv nsboot0 /dev/sdb /dev/sdc cache /dev/sdd
+sudo zpool create -m /srv mkyboot0 /dev/sdb /dev/sdc cache /dev/sdd
 
 # Create datasets
-sudo zfs create -o mountpoint=/srv/images nsboot0/images
-sudo zfs create -o mountpoint=/srv/images/boot nsboot0/images/boot
-sudo zfs create -o mountpoint=/srv/images/boot/snap nsboot0/images/boot/snap
-sudo zfs create -o mountpoint=/srv/images/games nsboot0/images/games
-sudo zfs create -o mountpoint=/srv/images/storages nsboot0/images/storages
-sudo zfs create nsboot0/writeback
+sudo zfs create -o mountpoint=/srv/images mkyboot0/images
+sudo zfs create -o mountpoint=/srv/images/boot mkyboot0/images/boot
+sudo zfs create -o mountpoint=/srv/images/boot/snap mkyboot0/images/boot/snap
+sudo zfs create -o mountpoint=/srv/images/games mkyboot0/images/games
+sudo zfs create -o mountpoint=/srv/images/storages mkyboot0/images/storages
+sudo zfs create mkyboot0/writeback
 ```
 
 ### 3. Configure Network
@@ -76,16 +76,16 @@ sudo netplan apply
 ### 4. Install Server Files
 
 ```bash
-sudo cp bin/nsbctl.lua /srv/nsboot/modules/nsbctl.lua
-sudo cp bin/client.lua /srv/nsboot/client.lua
-sudo cp bin/server.lua /usr/bin/nsbootd
-sudo chmod +x /usr/bin/nsbootd
+sudo cp bin/mkyctl.lua /srv/mkyboot/modules/mkyctl.lua
+sudo cp bin/client.lua /srv/mkyboot/client.lua
+sudo cp bin/server.lua /usr/bin/mkybootd
+sudo chmod +x /usr/bin/mkybootd
 sudo cp srv/tftp/* /srv/tftp/
 ```
 
 ### 5. Configure Clients
 
-Edit `/srv/nsboot/cfg/nsboot.json` to add your workstations:
+Edit `/srv/mkyboot/cfg/mkyboot.json` to add your workstations:
 
 ```json
 {
@@ -114,7 +114,7 @@ sudo systemctl restart nginx
 sudo systemctl restart tftpd-hpa
 sudo systemctl restart isc-dhcp-server
 sudo systemctl restart tgt
-sudo /etc/init.d/nsbootd start
+sudo /etc/init.d/mkybootd start
 ```
 
 ### 7. Access Web Interface
@@ -128,7 +128,7 @@ CLIENT PC
    |
    | PXE / iPXE
    v
-DISKLESS SERVER (NSBoot)
+DISKLESS SERVER (MKYBOOT)
    |
    +-- DHCP (ISC DHCP)
    +-- TFTP (tftpd-hpa)

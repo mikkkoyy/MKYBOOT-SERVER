@@ -1,4 +1,4 @@
----#!/usr/bin/lua
+﻿---#!/usr/bin/lua
 
 
 --tgtadm --lld iscsi --op new --mode target --tid 1 -T 											#CREATE TARGET
@@ -48,23 +48,23 @@
 
 --[[#>
 	[[=============================================================================================================================================================================================]]
-	 	nsboot={}
-	  	nsboot.cmd = {}
-	  	nsboot.lib = {}
-	  	nsboot.inc = {}
-	  	nsboot.web = {}
-	  	nsboot.bin = {}
-	  	nsboot.cfg = dofile("/srv/nsboot/cfg/cfg.lua").cfg
+	 	mkyboot={}
+	  	mkyboot.cmd = {}
+	  	mkyboot.lib = {}
+	  	mkyboot.inc = {}
+	  	mkyboot.web = {}
+	  	mkyboot.bin = {}
+	  	mkyboot.cfg = dofile("/srv/mkyboot/cfg/cfg.lua").cfg
 	--[[===========================================================================================================================================================================================]]
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
 
-		nsboot.lib.json		= require("json");
-		nsboot.lib.lfs  	= require("lfs");	
-		nsboot.lib.posix	= require("posix");	  	  	
+		mkyboot.lib.json		= require("json");
+		mkyboot.lib.lfs  	= require("lfs");	
+		mkyboot.lib.posix	= require("posix");	  	  	
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
-	  	nsboot.cmd.tgt = 	{
+	  	mkyboot.cmd.tgt = 	{
 					new 		= function(opt,p_tid) 	return os.execute("/usr/sbin/tgtadm --lld iscsi --op new --mode target --tid "..p_tid.." -T "..opt); 									end, 					--CREATE TARGET
 					destroy		= function(opt) 		return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --mode target --tid "..opt); 												end, 					--REMOVE TARGET
 					kill		= function(opt) 		return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --force --mode target --tid "..opt); 										end, 					--FORCE REMOVE TARGET
@@ -77,18 +77,18 @@
 								  return (#fd:read("a*") > 0);
 								  else return false; end; 																																		end
 					};																																											---
-		nsboot.cmd.lun = 	{																																									---
+		mkyboot.cmd.lun = 	{																																									---
 							add		= function(p_tid,p_lun,p_dev) return os.execute("/usr/sbin/tgtadm --lld iscsi --op new --mode logicalunit --tid "..p_tid.." --lun "..p_lun.." -b "..p_dev); end,
 							del 	= function(p_tid,p_lun) return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --mode logicalunit --tid "..p_tid.." --lun "..p_lun);					end,
 							stop 	= function(p_opt) return os.execute("/usr/sbin/tgtadm --offline "..p_opt);																					end,
 							start 	= function(p_opt) return os.execute("/usr/sbin/tgtadm --ready "..p_opt);																					end
 					};																																											---
-		nsboot.cmd.nbd = 	{																														
+		mkyboot.cmd.nbd = 	{																														
 							mod 	= function(p_max_part,p_nbds) return os.execute("/usr/sbin/modprobe nbd max_part "..p_max_part.." nbds "..p_nbds); 											end,
 							unmod 	= function() return os.execute("/usr/sbin/modprobe -r nbd"); 																								end,
-							add 	= function(p_dev,p_path,p_flags) os.execute("/srv/nsboot/client.lua "..p_dev.." "..p_path.." "..p_flags);			
+							add 	= function(p_dev,p_path,p_flags) os.execute("/srv/mkyboot/client.lua "..p_dev.." "..p_path.." "..p_flags);			
 									tmpfile = io.open("/tmp/debug","w")
-									tmpfile:write("/srv/nsboot/client.lua /usr/bin/qemu-nbd '--connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid "..p_flags.."'")
+									tmpfile:write("/srv/mkyboot/client.lua /usr/bin/qemu-nbd '--connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid "..p_flags.."'")
 									tmpfile:close()
 								end,
 							del 	= function(p_dev) return os.execute("/usr/bin/qemu-nbd -d "..p_dev.." 2>/dev/null"); 																		end,
@@ -103,7 +103,7 @@
 																fd = io.popen("/usr/bin/lsof -t "..p_dev.." | /usr/bin/grep \"$(/usr/bin/pgrep tgtd)\" 2>/dev/null");								---
 																if fd ~= nil and (#fd:read("a*") > 0) then return 2 end; else return false; end;												end
 					};
-		nsboot.cmd.img = 	{
+		mkyboot.cmd.img = 	{
 							new 	= function(p_path,p_size) 
 									return os.execute("/usr/bin/qemu-img -f qcow2 -o preallocation=metadata,compat=1.1,lazy_refcounts=on encryption=off "..p_path.." "..p_size);				end,
 							child 	= function(p_parrent,p_child) 
@@ -114,7 +114,7 @@
 								local fd; fd = io.popen("/usr/bin/lsof -t "..p_image.." 2>/dev/null"); return (#fd:read("a*") > 0);	else return false; end;										end
 							};
 
-		nsboot.cmd.zfs =  	{
+		mkyboot.cmd.zfs =  	{
 							mtab 	= function(p_args) local fd_file, fd_data
 																fd_file = io.open("/etc/mtab", "r");  
 																fd_data = fd_file:read("*a");
@@ -125,7 +125,7 @@
 							mount 	= function(p_data,p_point)	 return os.execute("/usr/bin/mount -t zfs "..p_data.." "..p_point.." 2>>/var/log/messages"); 									end,
 							unmount  = function(p_point)			 return os.execute("/usr/bin/umount -f "..p_point.." 2>/dev/null");															end
 							}
-		nsboot.cmd.power = 	{
+		mkyboot.cmd.power = 	{
 
 							on = function(p_iface, p_mac) return os.execute("/usr/sbin/etherwake -i "..p_iface.." "..p_mac); 																end
 							}			
@@ -134,65 +134,65 @@
 	--[[===========================================================================================================================================================================================]]
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
-	    nsboot.inc.checkconf = function(p_test) 
+	    mkyboot.inc.checkconf = function(p_test) 
 	    	local result = true
-				if	nsboot.cfg 						== nil then result=false end
-				if  nsboot.cfg ~= nil then
-				if	nsboot.cfg.server 				== nil then result=false end
-				if	nsboot.cfg.iscsi 				== nil then result=false end
-				if	nsboot.cfg.iscsi.iqn 			== nil then result=false end
-				if	nsboot.cfg.iscsi.listen 		== nil then result=false end
-				if	nsboot.cfg.iscsi.port 			== nil then result=false end
-				if	nsboot.cfg.iscsi.proto			== nil then result=false end
-				if	nsboot.cfg.dhcp 				== nil then result=false end
-				if	nsboot.cfg.dhcp.config			== nil then result=false end
-				if	nsboot.cfg.dhcp.config.global	== nil then result=false end
-				if	nsboot.cfg.server.vendor 		== nil then result=false end
-				if	nsboot.cfg.server.version		== nil then result=false end
-				if	nsboot.cfg.server.ipv4			== nil then result=false end
-				if	nsboot.cfg.server.mask			== nil then result=false end
-				if	nsboot.cfg.server.gateway		== nil then result=false end
-				if	nsboot.cfg.server.dns1			== nil then result=false end
-				if	nsboot.cfg.server.dns2			== nil then result=false end
-				if	nsboot.cfg.server.workdir		== nil then result=false end
-				if	nsboot.cfg.server.tftp			== nil then result=false end
-				if	nsboot.cfg.server.distdir		== nil then result=false end
-				if	nsboot.cfg.server.imgdir		== nil then result=false end
-				if	nsboot.cfg.server.imgdatadir	== nil then result=false end
-				if	nsboot.cfg.server.imgbackdir	== nil then result=false end
-				if	nsboot.cfg.server.config		== nil then result=false end
-				if  nsboot.cfg.wks 					== nil then result=false end
-				if	nsboot.cfg.dhcp.port 			== nil then result=false end
-				if	nsboot.cfg.dhcp.workdir			== nil then result=false end
-				if	nsboot.cfg.tftp.port 			== nil then result=false end
-				if  nsboot.cfg.tftp.workdir			== nil then result=false end
-				if  nsboot.cfg.server.image_prefix  == nil then result=false end
-				if  nsboot.cfg.server.nbd_nbds 		== nil then result=false end
-				if  nsboot.cfg.server.nbd_max_part  == nil then result=false end
+				if	mkyboot.cfg 						== nil then result=false end
+				if  mkyboot.cfg ~= nil then
+				if	mkyboot.cfg.server 				== nil then result=false end
+				if	mkyboot.cfg.iscsi 				== nil then result=false end
+				if	mkyboot.cfg.iscsi.iqn 			== nil then result=false end
+				if	mkyboot.cfg.iscsi.listen 		== nil then result=false end
+				if	mkyboot.cfg.iscsi.port 			== nil then result=false end
+				if	mkyboot.cfg.iscsi.proto			== nil then result=false end
+				if	mkyboot.cfg.dhcp 				== nil then result=false end
+				if	mkyboot.cfg.dhcp.config			== nil then result=false end
+				if	mkyboot.cfg.dhcp.config.global	== nil then result=false end
+				if	mkyboot.cfg.server.vendor 		== nil then result=false end
+				if	mkyboot.cfg.server.version		== nil then result=false end
+				if	mkyboot.cfg.server.ipv4			== nil then result=false end
+				if	mkyboot.cfg.server.mask			== nil then result=false end
+				if	mkyboot.cfg.server.gateway		== nil then result=false end
+				if	mkyboot.cfg.server.dns1			== nil then result=false end
+				if	mkyboot.cfg.server.dns2			== nil then result=false end
+				if	mkyboot.cfg.server.workdir		== nil then result=false end
+				if	mkyboot.cfg.server.tftp			== nil then result=false end
+				if	mkyboot.cfg.server.distdir		== nil then result=false end
+				if	mkyboot.cfg.server.imgdir		== nil then result=false end
+				if	mkyboot.cfg.server.imgdatadir	== nil then result=false end
+				if	mkyboot.cfg.server.imgbackdir	== nil then result=false end
+				if	mkyboot.cfg.server.config		== nil then result=false end
+				if  mkyboot.cfg.wks 					== nil then result=false end
+				if	mkyboot.cfg.dhcp.port 			== nil then result=false end
+				if	mkyboot.cfg.dhcp.workdir			== nil then result=false end
+				if	mkyboot.cfg.tftp.port 			== nil then result=false end
+				if  mkyboot.cfg.tftp.workdir			== nil then result=false end
+				if  mkyboot.cfg.server.image_prefix  == nil then result=false end
+				if  mkyboot.cfg.server.nbd_nbds 		== nil then result=false end
+				if  mkyboot.cfg.server.nbd_max_part  == nil then result=false end
 				end
 					return result
 		end;			
-		nsboot.inc.debug = function(t_data)
-			--if t_data ~= nil then  io.open("/tmp/debug.nsboot","a"):write(t_data,"\n"):close() end;
+		mkyboot.inc.debug = function(t_data)
+			--if t_data ~= nil then  io.open("/tmp/debug.mkyboot","a"):write(t_data,"\n"):close() end;
 		end;
-		nsboot.inc.lsof = function(p_patern)
+		mkyboot.inc.lsof = function(p_patern)
 					if os.execute("/usr/bin/lsof "..p_patern.." 2>/dev/null") ~= nil then 
 					local fd; fd = io.popen("/usr/bin/lsof "..p_patern.." 2>/dev/null"); return (#fd:read("a*") > 0); 	
 					else 
 					return false; end;
 
 		end;
-		nsboot.inc.lsofkill = function(p_path)
-					nsboot.inc.debug("TUT 0")
+		mkyboot.inc.lsofkill = function(p_path)
+					mkyboot.inc.debug("TUT 0")
 					if os.execute("/usr/bin/lsof -t "..p_path.." 2>/dev/null") ~= nil then 
 					local fd; fd = io.popen("/usr/bin/kill -9 $(/usr/bin/lsof -t "..p_path..") 2>/dev/null"); return (#fd:read("a*") > 0); 	
 					else 
 					return false; end;
 							 
 		end;
-		nsboot.inc.search_nbd = function ()
-					for i_index = 1,nsboot.cfg.server.nbd_nbds,1 do
-						nsboot.inc.debug("TUT 2")
+		mkyboot.inc.search_nbd = function ()
+					for i_index = 1,mkyboot.cfg.server.nbd_nbds,1 do
+						mkyboot.inc.debug("TUT 2")
 						if os.execute("/usr/bin/lsof /dev/nbd"..i_index.." 2>/dev/null | /usr/bin/wc -l") ~= nil then 
 							local fd; fd = io.popen("/usr/bin/lsof /dev/nbd"..i_index.." 2>/dev/null | /usr/bin/wc -l"); if tonumber(fd:read("a*")) == 0 then return("/dev/nbd"..i_index);  end;
 						else 
@@ -201,9 +201,9 @@
 					end;
 		end; 
 
-		nsboot.inc.getpid_nbd = function (t_path)
+		mkyboot.inc.getpid_nbd = function (t_path)
 			local result
-			if t_path ~= nil and nsboot.inc.isFile(t_path) then
+			if t_path ~= nil and mkyboot.inc.isFile(t_path) then
 				if os.execute("/usr/bin/lsof -t "..t_path.." 2>/dev/null") ~= nil then 
 
 					local fd; fd = io.popen("/usr/bin/lsof -t "..t_path.." 2>/dev/null "); result = (fd:read("a*"));
@@ -215,7 +215,7 @@
 			result = nil
 		end;
 		
-		nsboot.inc.getdev_nbd = function (t_pid)
+		mkyboot.inc.getdev_nbd = function (t_pid)
 			local result
 				if t_pid ~= nil and os.execute("/usr/bin/lsof -p "..t_pid:gsub('%W','').." 2>/dev/null |  /usr/bin/awk '/\\/dev\\/nbd/ { print $NF }' ") then 
 					local fd; fd = io.popen("/usr/bin/lsof -p "..t_pid:gsub('%W','').." 2>/dev/null |  /usr/bin/awk '/\\/dev\\/nbd/ { print $NF }' "); result = fd:read("a*") ;
@@ -225,48 +225,48 @@
 				end; 	
 		end;
 
-		nsboot.inc.scCheck	= function()
+		mkyboot.inc.scCheck	= function()
 				local result = true
-				if nsboot.inc.checkconf then
-					if not nsboot.inc.lsof("-t -i:"..nsboot.cfg.dhcp.port) then result=false 	end
-					if not nsboot.inc.lsof("-t -i:"..nsboot.cfg.tftp.port) then result=false 	end
-					if not nsboot.inc.lsof("-t -i:"..nsboot.cfg.iscsi.port) then result=false	end
+				if mkyboot.inc.checkconf then
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.dhcp.port) then result=false 	end
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.tftp.port) then result=false 	end
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.iscsi.port) then result=false	end
 				end
 				return result
 		end;
-		nsboot.inc.systemctl = function(p_name,p_cmd)
+		mkyboot.inc.systemctl = function(p_name,p_cmd)
 						return os.execute("/usr/bin/systemctl "..p_cmd.." "..p_name)
 		end;
-		nsboot.inc.monit = function()
-					if not nsboot.inc.lsof("-t -i:"..nsboot.cfg.dhcp.port) 	then nsboot.inc.systemctl("isc-dhcp-server","start"); nsboot.inc.systemctl("isc-dhcp-server","restart");	end;
-					if not nsboot.inc.lsof("-t -i:"..nsboot.cfg.tftp.port) 	then nsboot.inc.systemctl("isc-dhcp-server","start"); nsboot.inc.systemctl("tftpd-hpa","restart");	end;
-					if not nsboot.inc.lsof("-t -i:"..nsboot.cfg.iscsi.port) then nsboot.inc.systemctl("isc-dhcp-server","start"); nsboot.inc.systemctl("tgt","restart");	end;
+		mkyboot.inc.monit = function()
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.dhcp.port) 	then mkyboot.inc.systemctl("isc-dhcp-server","start"); mkyboot.inc.systemctl("isc-dhcp-server","restart");	end;
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.tftp.port) 	then mkyboot.inc.systemctl("isc-dhcp-server","start"); mkyboot.inc.systemctl("tftpd-hpa","restart");	end;
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.iscsi.port) then mkyboot.inc.systemctl("isc-dhcp-server","start"); mkyboot.inc.systemctl("tgt","restart");	end;
 		end;
-		nsboot.inc.GetMacFromIPv4 = function(p_ipv4)
-			if nsboot.inc.checkconf() and p_ipv4 ~= nil then
+		mkyboot.inc.GetMacFromIPv4 = function(p_ipv4)
+			if mkyboot.inc.checkconf() and p_ipv4 ~= nil then
 				local i,v
-					for i,v in pairs(nsboot.cfg.wks) do
+					for i,v in pairs(mkyboot.cfg.wks) do
 						if p_ipv4 == v.ipv4 then if v.mac ~= nil then return v.mac; end; end;
 					end;
 				i,v = nil,nil
 			end;
 		end;
-		nsboot.inc.GetIDFromIPv4 = function(p_ipv4)
-			if nsboot.inc.checkconf() and p_ipv4 ~= nil then
+		mkyboot.inc.GetIDFromIPv4 = function(p_ipv4)
+			if mkyboot.inc.checkconf() and p_ipv4 ~= nil then
 				local i,v
-					for i,v in pairs(nsboot.cfg.wks) do
+					for i,v in pairs(mkyboot.cfg.wks) do
 						if p_ipv4 == v.ipv4 then  return i; end;
 					end;
 				i,v = nil,nil
 			end;
 		end;
 	
-		nsboot.inc.unescape = function(s)
+		mkyboot.inc.unescape = function(s)
 			s = string.gsub(s, "+", " ")
 			s = string.gsub(s, "%%(%x%x)", function(h)return string.char(tonumber(h, 16))end)
 			return s
 		end
-	function nsboot.inc.isDir(name)
+	function mkyboot.inc.isDir(name)
 		local lfs = require("lfs")
 	    if type(name)~="string" then return false end
 	    local cd = lfs.currentdir()
@@ -274,27 +274,27 @@
 	    lfs.chdir(cd)
 	    return is
 	end;
-	function nsboot.inc.isFile(name)
-	        if name ~= nil and nsboot.lib.posix.stat(name) ~= nil then return true else return false end;
+	function mkyboot.inc.isFile(name)
+	        if name ~= nil and mkyboot.lib.posix.stat(name) ~= nil then return true else return false end;
 	        -- note that the short evaluation is to
 	        -- return false instead of a possible nil
 
 	    return false
 	end;
 
-	function nsboot.inc.isFileOrDir(name)
+	function mkyboot.inc.isFileOrDir(name)
 	    if type(name)~="string" then return false end
 	    return os.rename(name, name) and true or false
 	end;	
-	function nsboot.inc.isSupperMode(id)
-		if nsboot.inc.checkconf() and tostring(nsboot.cfg.wks[tonumber(id)].supper) ~=nil and tostring(nsboot.cfg.wks[tonumber(id)].supper) == "1" then 
+	function mkyboot.inc.isSupperMode(id)
+		if mkyboot.inc.checkconf() and tostring(mkyboot.cfg.wks[tonumber(id)].supper) ~=nil and tostring(mkyboot.cfg.wks[tonumber(id)].supper) == "1" then 
 			return true
 		else
 			return false
 		end;
 	end;
-	function nsboot.inc.ls_files(path)
-		if nsboot.inc.isDir(path) then
+	function mkyboot.inc.ls_files(path)
+		if mkyboot.inc.isDir(path) then
 			local result, t_res = {}
 				iter, dir_obj = lfs.dir (path)
 				while true do
@@ -308,8 +308,8 @@
 			return "none"
 		end;
 	end;
-	function nsboot.inc.ls_devices(path)
-		if nsboot.inc.isDir(path) then
+	function mkyboot.inc.ls_devices(path)
+		if mkyboot.inc.isDir(path) then
 			local result, t_res = {}
 				iter, dir_obj = lfs.dir (path)
 				while true do
@@ -323,7 +323,7 @@
 			return "none"
 		end;
 	end;
-	function nsboot.inc.isMacARP(p_ip)
+	function mkyboot.inc.isMacARP(p_ip)
 		local f_tmp,f_mac,f_data = os.tmpname()
 		os.execute("/usr/sbin/arp -a "..p_ip.." | /usr/bin/awk '{ print $4 }' > "..f_tmp)
 		f_mac = io.open(f_tmp, "r")
@@ -335,8 +335,8 @@
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
 
-			function nsboot:SaveToFile(fpath, t_data)
-				if nsboot.inc.checkconf() then
+			function mkyboot:SaveToFile(fpath, t_data)
+				if mkyboot.inc.checkconf() then
 					local json,result,file = require("json");
 					file = io.open(fpath, "w");
 					result = json.encode(t_data)
@@ -347,7 +347,7 @@
 					return false
 				end
 			end;
-			function nsboot:LoadFromFile(fpath)
+			function mkyboot:LoadFromFile(fpath)
 				local l_data,l_result,file = {};
 				file = io.open(fpath, "r");
 				l_result = file:read("*a");
@@ -355,25 +355,25 @@
 				file:close()
 				return l_data
 			end;
-			function nsboot:ExportDHCP()
-				if nsboot.inc.checkconf() then
-					-- if isDir(nsboot.cfg.dhcp.workdir) and isFile(nsboot.cfg.dhcp.workdir.."/dhcpd.conf") then
-						os.rename(nsboot.cfg.dhcp.workdir.."/dhcpd.conf",nsboot.cfg.dhcp.workdir.."/dhcpd.conf.backup_"..os.date("%D%T"):gsub('%W',''));
-						local file,data,i,v = io.open(nsboot.cfg.dhcp.workdir.."/dhcpd.conf", "w") ;
+			function mkyboot:ExportDHCP()
+				if mkyboot.inc.checkconf() then
+					-- if isDir(mkyboot.cfg.dhcp.workdir) and isFile(mkyboot.cfg.dhcp.workdir.."/dhcpd.conf") then
+						os.rename(mkyboot.cfg.dhcp.workdir.."/dhcpd.conf",mkyboot.cfg.dhcp.workdir.."/dhcpd.conf.backup_"..os.date("%D%T"):gsub('%W',''));
+						local file,data,i,v = io.open(mkyboot.cfg.dhcp.workdir.."/dhcpd.conf", "w") ;
 							file:write("## ### THIS FILE AUTOGEENERATION ### #\n");
-							file:write("# ### "..nsboot.cfg.server.vendor.." "..nsboot.cfg.server.version.."______  ### #\n");
+							file:write("# ### "..mkyboot.cfg.server.vendor.." "..mkyboot.cfg.server.version.."______  ### #\n");
 							file:write("#[============================================================================================]#\n");
-						for i,v in pairs(nsboot.cfg.dhcp.config.global) do
+						for i,v in pairs(mkyboot.cfg.dhcp.config.global) do
 							file:write(i," ",tostring(v)..";\n"); 
 						end;
 						file:write("#[============================================================================================]#\n");
 						i,v = nil,nil
-						for i,v in pairs(nsboot.cfg.dhcp.config.opt) do
+						for i,v in pairs(mkyboot.cfg.dhcp.config.opt) do
 							if i == 'domain-name' then file:write("	option "..i," \"",tostring(v).."\";\n"); else file:write("	option "..i," ",tostring(v)..";\n"); end;
 						end;
 						file:write("#[============================================================================================]#\n");
 						i,v = nil,nil
-						for i,v in ipairs(nsboot.cfg.dhcp.config.sub) do
+						for i,v in ipairs(mkyboot.cfg.dhcp.config.sub) do
 							file:write("	subnet ",v.sub," netmask ",v.mask," {\n");
 								local k,val 
 								for k,val in ipairs(v.ranges) do
@@ -383,10 +383,10 @@
 								file:write("}\n");	
 						end;
 						file:write("#[============================================================================================]#\n");
-						file:write(nsboot.cfg.dhcp.config.ipxe, "\n");
+						file:write(mkyboot.cfg.dhcp.config.ipxe, "\n");
 						file:write("#[============================================================================================]#\n");
 						i,v = nil,nil
-							for i,v in pairs(nsboot.cfg.wks) do
+							for i,v in pairs(mkyboot.cfg.wks) do
 								if v.name ~= nil then
 								 if tostring(v.enable) == "1" then
 									file:write("host ",v.name," {\n");
@@ -421,78 +421,78 @@
 		
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
-		function nsboot:tgtstart(p_ip)
-			nsboot.inc.monit()
-			if nsboot.inc.scCheck() and nsboot.inc.checkconf() then
-					local l_id = nsboot.inc.GetIDFromIPv4(p_ip);
-						if tostring(nsboot.cfg.server.debug) == "1" then print(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W',''),nsboot.cfg.wks[l_id].tid); print(nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
-						if not nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','')) and tostring(nsboot.cfg.wks[l_id].enable) == "1" then nsboot.cmd.tgt.new(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W',''),nsboot.cfg.wks[l_id].tid); nsboot.cmd.tgt.rules(nsboot.cfg.wks[l_id].tid,p_ip); end;
-						if tostring(nsboot.cfg.server.debug) == "1" then 	print("STARTED !"); print(nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
+		function mkyboot:tgtstart(p_ip)
+			mkyboot.inc.monit()
+			if mkyboot.inc.scCheck() and mkyboot.inc.checkconf() then
+					local l_id = mkyboot.inc.GetIDFromIPv4(p_ip);
+						if tostring(mkyboot.cfg.server.debug) == "1" then print(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''),mkyboot.cfg.wks[l_id].tid); print(mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
+						if not mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','')) and tostring(mkyboot.cfg.wks[l_id].enable) == "1" then mkyboot.cmd.tgt.new(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''),mkyboot.cfg.wks[l_id].tid); mkyboot.cmd.tgt.rules(mkyboot.cfg.wks[l_id].tid,p_ip); end;
+						if tostring(mkyboot.cfg.server.debug) == "1" then 	print("STARTED !"); print(mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
 			end;
 		end;
-		function nsboot:tgtstop(p_ip)
-			nsboot.inc.monit()
-			if nsboot.inc.scCheck() and nsboot.inc.checkconf() then
-					local l_id = nsboot.inc.GetIDFromIPv4(p_ip);
-						if tostring(nsboot.cfg.server.debug) == "1" then print (nsboot.cfg.wks[l_id].tid); print(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','')); print(nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
+		function mkyboot:tgtstop(p_ip)
+			mkyboot.inc.monit()
+			if mkyboot.inc.scCheck() and mkyboot.inc.checkconf() then
+					local l_id = mkyboot.inc.GetIDFromIPv4(p_ip);
+						if tostring(mkyboot.cfg.server.debug) == "1" then print (mkyboot.cfg.wks[l_id].tid); print(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','')); print(mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
 						-- if 
-						if nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','')) then nsboot.cmd.tgt.kill(nsboot.cfg.wks[l_id].tid); end;
-						if tostring(nsboot.cfg.server.debug) == "1" then print(nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
+						if mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','')) then mkyboot.cmd.tgt.kill(mkyboot.cfg.wks[l_id].tid); end;
+						if tostring(mkyboot.cfg.server.debug) == "1" then print(mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))); end;
 			end;
 		end;
 	--[[===========================================================================================================================================================================================]]
-		function nsboot:mkChild(p_ip)
-			local l_id,l_lockf,p_child,p_parrent = nsboot.inc.GetIDFromIPv4(p_ip) 
-			local l_vid = nsboot.cfg.wks[l_id].mac:gsub('%W','')
-			if tostring(nsboot.cfg.wks[l_id].enable) == "1" then
+		function mkyboot:mkChild(p_ip)
+			local l_id,l_lockf,p_child,p_parrent = mkyboot.inc.GetIDFromIPv4(p_ip) 
+			local l_vid = mkyboot.cfg.wks[l_id].mac:gsub('%W','')
+			if tostring(mkyboot.cfg.wks[l_id].enable) == "1" then
 				
-				for i,v in pairs(nsboot.cfg.wks[l_id].img) do
-						l_lockf = nsboot.cfg.server.lockfile..i..l_vid;
+				for i,v in pairs(mkyboot.cfg.wks[l_id].img) do
+						l_lockf = mkyboot.cfg.server.lockfile..i..l_vid;
 						
 						--[[ PROCESS FIND PATH PARRENTS ]]--
 
-					if tostring(nsboot.cfg.wks[l_id].enable) == "1" and tostring(v.enable) == "1" and v.type == "dyndisk" then
-						if  tostring(nsboot.cfg.wks[l_id].enable) == "1" and  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = nsboot.cfg.server.imgdir.."/"..v.path; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid; 	end;
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = nsboot.cfg.server.imgdir.."/"..nsboot.cfg.zfs.tmpname.."/"..l_vid.."/"..v.path; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid	end; --
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = nsboot.cfg.server.imgdir.."/"..nsboot.cfg.zfs.tmpname.."/"..l_vid.."/"..v.path; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid	end;
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = nsboot.cfg.server.imgdir.."/"..nsboot.cfg.zfs.tmpname.."/"..l_vid.."/"..v.path; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid	end;
-					elseif 	tostring(nsboot.cfg.wks[l_id].enable) == "1" and tostring(v.enable) == "1" and v.type == "dynblock" then
-						if  tostring(nsboot.cfg.wks[l_id].enable) == "1" and  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = nsboot.cfg.zfs.devpoint.."/"..v.path; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid; 	end;
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = nsboot.cfg.zfs.devpoint.."/"..v.path.."@"..nsboot.cfg.zfs.tmpname.."_"..l_vid; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid	end; --
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = nsboot.cfg.zfs.devpoint.."/"..v.path.."@"..nsboot.cfg.zfs.tmpname.."_"..l_vid; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid	end;
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = nsboot.cfg.zfs.devpoint.."/"..v.path.."@"..nsboot.cfg.zfs.tmpname.."_"..l_vid; p_child = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..l_vid	end;
+					if tostring(mkyboot.cfg.wks[l_id].enable) == "1" and tostring(v.enable) == "1" and v.type == "dyndisk" then
+						if  tostring(mkyboot.cfg.wks[l_id].enable) == "1" and  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = mkyboot.cfg.server.imgdir.."/"..v.path; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid; 	end;
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = mkyboot.cfg.server.imgdir.."/"..mkyboot.cfg.zfs.tmpname.."/"..l_vid.."/"..v.path; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid	end; --
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = mkyboot.cfg.server.imgdir.."/"..mkyboot.cfg.zfs.tmpname.."/"..l_vid.."/"..v.path; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid	end;
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = mkyboot.cfg.server.imgdir.."/"..mkyboot.cfg.zfs.tmpname.."/"..l_vid.."/"..v.path; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid	end;
+					elseif 	tostring(mkyboot.cfg.wks[l_id].enable) == "1" and tostring(v.enable) == "1" and v.type == "dynblock" then
+						if  tostring(mkyboot.cfg.wks[l_id].enable) == "1" and  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = mkyboot.cfg.zfs.devpoint.."/"..v.path; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid; 	end;
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = mkyboot.cfg.zfs.devpoint.."/"..v.path.."@"..mkyboot.cfg.zfs.tmpname.."_"..l_vid; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid	end; --
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "0" and tostring(v.enable) == "1" and tostring(v.commit) == "1" then p_parrent = mkyboot.cfg.zfs.devpoint.."/"..v.path.."@"..mkyboot.cfg.zfs.tmpname.."_"..l_vid; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid	end;
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "0" then p_parrent = mkyboot.cfg.zfs.devpoint.."/"..v.path.."@"..mkyboot.cfg.zfs.tmpname.."_"..l_vid; p_child = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..l_vid	end;
 					end;	
 
-					if  tostring(nsboot.cfg.wks[l_id].enable) == "1" and tostring(v.enable) == "1" and v.type ~= "iso"  then
+					if  tostring(mkyboot.cfg.wks[l_id].enable) == "1" and tostring(v.enable) == "1" and v.type ~= "iso"  then
 						--[[ PROCESS CREATE CHILD FILE ]]--
 
-						if  tostring(nsboot.cfg.wks[l_id].enable) == "1" and  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" and not nsboot.inc.isFile(l_lockf) and nsboot.inc.isFile(p_child) then 
-								while nsboot.cmd.img.used(p_child) do
-									nsboot.inc.lsofkill(p_child)
+						if  tostring(mkyboot.cfg.wks[l_id].enable) == "1" and  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" and not mkyboot.inc.isFile(l_lockf) and mkyboot.inc.isFile(p_child) then 
+								while mkyboot.cmd.img.used(p_child) do
+									mkyboot.inc.lsofkill(p_child)
 									require("posix.unistd").sleep(0.5);
 								end;
-								nsboot.cmd.img.del(p_child);
-								nsboot.cmd.img.child(p_parrent, p_child);
+								mkyboot.cmd.img.del(p_child);
+								mkyboot.cmd.img.child(p_parrent, p_child);
 								local tmpfile = io.open(l_lockf, "w");
-						elseif tostring(nsboot.cfg.wks[l_id].enable) == "1" and  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" and not nsboot.inc.isFile(l_lockf) and not nsboot.inc.isFile(p_child) then
+						elseif tostring(mkyboot.cfg.wks[l_id].enable) == "1" and  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" and not mkyboot.inc.isFile(l_lockf) and not mkyboot.inc.isFile(p_child) then
 							local tmpfile = io.open(l_lockf, "w")
-							nsboot.cmd.img.child(p_parrent, p_child);
-						elseif tostring(nsboot.cfg.wks[l_id].enable) == "1" and  tostring(nsboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" and nsboot.inc.isFile(l_lockf) and nsboot.inc.isFile(p_child) then
+							mkyboot.cmd.img.child(p_parrent, p_child);
+						elseif tostring(mkyboot.cfg.wks[l_id].enable) == "1" and  tostring(mkyboot.cfg.wks[l_id].supper) == "1" and tostring(v.enable) == "1" and tostring(v.commit) == "1" and mkyboot.inc.isFile(l_lockf) and mkyboot.inc.isFile(p_child) then
 							local tmpfile = io.open(l_lockf, "w");
 						else
-							if nsboot.inc.isFile(p_child) then
-								while nsboot.cmd.img.used(p_child) do
-									nsboot.inc.lsofkill(p_child)
+							if mkyboot.inc.isFile(p_child) then
+								while mkyboot.cmd.img.used(p_child) do
+									mkyboot.inc.lsofkill(p_child)
 									require("posix.unistd").sleep(0.5);
 								end;
-								nsboot.cmd.img.del(p_child);
-								if nsboot.inc.isFile(l_lockf) then os.remove(l_lockf) end
+								mkyboot.cmd.img.del(p_child);
+								if mkyboot.inc.isFile(l_lockf) then os.remove(l_lockf) end
 							end;						
 							if p_parrent ~= nil and p_child ~= nil  then
-								while not nsboot.inc.isFile(p_parrent) do
+								while not mkyboot.inc.isFile(p_parrent) do
 									require("posix.unistd").sleep(0.5);
 								end;
-									nsboot.cmd.img.child(p_parrent, p_child);
+									mkyboot.cmd.img.child(p_parrent, p_child);
 									ngx.say(p_parrent," ", p_child)
 							end;
 						end;
@@ -504,30 +504,30 @@
 			end;			
 			l_id,i,v = nil,nil,nil;
 		end;
-		function nsboot:rmChild(p_ip)
+		function mkyboot:rmChild(p_ip)
 
-			local l_id,i,v,img_bpath,img_ppath = nsboot.inc.GetIDFromIPv4(p_ip);
-			if nsboot.cfg.wks[l_id].img ~=nil then
-				for i,v in pairs(nsboot.cfg.wks[l_id].img) do
-					if nsboot.inc.checkconf() and v.path ~= nil and v.type == "dyndisk" and tostring(v.enable) == "1" then
-						img_bpath,img_ppath = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W',''), nsboot.cfg.server.imgdir.."/"..v.path;
-					elseif nsboot.inc.checkconf() and v.path ~= nil and v.type == "dyndata" and tostring(v.enable) == "1" then
-						img_bpath,img_ppath = nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W',''), nsboot.cfg.server.imgdatadir.."/"..v.path;
+			local l_id,i,v,img_bpath,img_ppath = mkyboot.inc.GetIDFromIPv4(p_ip);
+			if mkyboot.cfg.wks[l_id].img ~=nil then
+				for i,v in pairs(mkyboot.cfg.wks[l_id].img) do
+					if mkyboot.inc.checkconf() and v.path ~= nil and v.type == "dyndisk" and tostring(v.enable) == "1" then
+						img_bpath,img_ppath = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W',''), mkyboot.cfg.server.imgdir.."/"..v.path;
+					elseif mkyboot.inc.checkconf() and v.path ~= nil and v.type == "dyndata" and tostring(v.enable) == "1" then
+						img_bpath,img_ppath = mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W',''), mkyboot.cfg.server.imgdatadir.."/"..v.path;
 					end;
 					if img_ppath  then
-						if nsboot.inc.isFile(img_bpath) then
-							while nsboot.cmd.img.used(img_bpath) do
-								nsboot.inc.lsofkill(img_bpath)
+						if mkyboot.inc.isFile(img_bpath) then
+							while mkyboot.cmd.img.used(img_bpath) do
+								mkyboot.inc.lsofkill(img_bpath)
 								require("posix.unistd").sleep(0.5);
 							end;
-							nsboot.cmd.img.del(img_bpath);
+							mkyboot.cmd.img.del(img_bpath);
 						end;
 					end;
 					img_ppath = nil;
 				end;
 			end;				
 		end;
-		function nsboot:checkstatpc(p_ip)
+		function mkyboot:checkstatpc(p_ip)
 			local fd,result 
 				fd = io.popen("/usr/sbin/tgtadm --lld iscsi --op show --mode target | /usr/bin/grep 'IP Address: "..p_ip.."'"); --/usr/sbin/tgtadm --lld iscsi --op show --mode target | grep --color "IP Address: 192.168.0.4"
 				return (#fd:read("a*") > 0);
@@ -535,21 +535,21 @@
 	
 
 	--[[===========================================================================================================================================================================================]]
-		function nsboot:nbdFree(p_ip)
-				local l_id,i,v = nsboot.inc.GetIDFromIPv4(p_ip);
+		function mkyboot:nbdFree(p_ip)
+				local l_id,i,v = mkyboot.inc.GetIDFromIPv4(p_ip);
 
-			if nsboot.cfg.wks[l_id].img ~=nil then
+			if mkyboot.cfg.wks[l_id].img ~=nil then
 
-				for i,v in pairs(nsboot.cfg.wks[l_id].img) do
+				for i,v in pairs(mkyboot.cfg.wks[l_id].img) do
 
-				if nsboot.inc.isFile(nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W','')) and nsboot.inc.getdev_nbd(nsboot.inc.getpid_nbd(nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W',''))) ~= nil then  v.nbd = nsboot.inc.getdev_nbd(nsboot.inc.getpid_nbd(nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W',''))); else v.nbd = nil end;
+				if mkyboot.inc.isFile(mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W','')) and mkyboot.inc.getdev_nbd(mkyboot.inc.getpid_nbd(mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))) ~= nil then  v.nbd = mkyboot.inc.getdev_nbd(mkyboot.inc.getpid_nbd(mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))); else v.nbd = nil end;
 				if v.nbd ~= nil then
 					ngx.say(v.nbd)
-					ngx.say(nsboot.cmd.nbd.used(v.nbd))
-				--	while nsboot.cmd.nbd.used(v.nbd) do
+					ngx.say(mkyboot.cmd.nbd.used(v.nbd))
+				--	while mkyboot.cmd.nbd.used(v.nbd) do
 							
-									nsboot:tgtstop(p_ip); 
-									nsboot.cmd.nbd.del(v.nbd); 
+									mkyboot:tgtstop(p_ip); 
+									mkyboot.cmd.nbd.del(v.nbd); 
   									require("posix.unistd").sleep(0.5);
 				--	end;
 				 end;
@@ -557,31 +557,31 @@
 			end;
 			l_id,i,v = nil,nil,nil;
 		end;
-		function nsboot:nbdConnect(p_ip)
-			local l_id,i,v = nsboot.inc.GetIDFromIPv4(p_ip);
-			if l_id ~= nil and nsboot.cfg.wks[l_id].img ~=nil then
-				for i,v in pairs(nsboot.cfg.wks[l_id].img) do
-					v.nbd = nsboot.inc.search_nbd();
-					while nsboot.cmd.nbd.used(v.nbd) do
-							if tostring(nsboot.cfg.server.debug) == "1" then io.write("blocked: "); print(nsboot.cmd.nbd.usewho(v.nbd)); end;
-							if nsboot.cmd.nbd.usewho(v.nbd) == 2 then 
-								while nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','')) do 
-									nsboot:tgtstop(p_ip); 
+		function mkyboot:nbdConnect(p_ip)
+			local l_id,i,v = mkyboot.inc.GetIDFromIPv4(p_ip);
+			if l_id ~= nil and mkyboot.cfg.wks[l_id].img ~=nil then
+				for i,v in pairs(mkyboot.cfg.wks[l_id].img) do
+					v.nbd = mkyboot.inc.search_nbd();
+					while mkyboot.cmd.nbd.used(v.nbd) do
+							if tostring(mkyboot.cfg.server.debug) == "1" then io.write("blocked: "); print(mkyboot.cmd.nbd.usewho(v.nbd)); end;
+							if mkyboot.cmd.nbd.usewho(v.nbd) == 2 then 
+								while mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','')) do 
+									mkyboot:tgtstop(p_ip); 
 									require("posix.unistd").sleep(1);
 								end
-							elseif  nsboot.cmd.nbd.usewho(v.nbd) == 1 then 
-								nsboot.cmd.nbd.del(v.nbd); 
+							elseif  mkyboot.cmd.nbd.usewho(v.nbd) == 1 then 
+								mkyboot.cmd.nbd.del(v.nbd); 
 							end;
 							require("posix.unistd").sleep(0.5);
 					end;
-					while nsboot.cmd.nbd.used(v.nbd) do
+					while mkyboot.cmd.nbd.used(v.nbd) do
 						require("posix.unistd").sleep(0.5);
 					end
-					if not nsboot.cmd.nbd.used(v.nbd) then
-						if tostring(nsboot.cfg.server.debug) == "1" then io.write("unblocked: "); print(v.nbd); end;
+					if not mkyboot.cmd.nbd.used(v.nbd) then
+						if tostring(mkyboot.cfg.server.debug) == "1" then io.write("unblocked: "); print(v.nbd); end;
 						if v.path ~= nil and tostring(v.enable) == "1" then
 							if tostring(v.enable) == "1"  and v.type == "dyndisk" or v.type == "dynblock" then
-								nsboot.cmd.nbd.add(v.nbd,nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W',''),v.cache)	
+								mkyboot.cmd.nbd.add(v.nbd,mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W',''),v.cache)	
 							end;
 						end;
 					end;					
@@ -589,74 +589,74 @@
 			end;
 			l_id,i,v = nil,nil,nil;
 		end;
-		function nsboot:LunAdd(p_ip)
-			local l_id,i,v = nsboot.inc.GetIDFromIPv4(p_ip);
-				if nsboot.inc.checkconf() then
-					while not nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','')) do
-						nsboot:tgtstart(p_ip)
+		function mkyboot:LunAdd(p_ip)
+			local l_id,i,v = mkyboot.inc.GetIDFromIPv4(p_ip);
+				if mkyboot.inc.checkconf() then
+					while not mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','')) do
+						mkyboot:tgtstart(p_ip)
 						require("posix.unistd").sleep(1);
 					end;
-					if nsboot.cmd.tgt.used(nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','')) then
+					if mkyboot.cmd.tgt.used(mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','')) then
 
-						for i,v in ipairs(nsboot.cfg.wks[l_id].img) do
-								if tostring(nsboot.cfg.server.debug) == "1" then print(v.nbd,nsboot.cfg.server.imgbackdir.."/"..v.path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[l_id].mac:gsub('%W','')); end;
-								if tostring(v.enable) == "1" and v.type == "dyndisk" and nsboot.cfg.wks[l_id].tid ~= nil and nsboot.inc.isFile(v.nbd) then
-								if tostring(nsboot.cfg.server.debug) == "1" then print(nsboot.cfg.wks[l_id].tid); end;
-									if tostring(nsboot.cfg.server.debug) == "1" then ngx.say("ADD 1:  :  : NUM:",nsboot.cfg.wks[l_id].tid,i,v.nbd); end;
-									nsboot.cmd.lun.add(nsboot.cfg.wks[l_id].tid,i,v.nbd)
+						for i,v in ipairs(mkyboot.cfg.wks[l_id].img) do
+								if tostring(mkyboot.cfg.server.debug) == "1" then print(v.nbd,mkyboot.cfg.server.imgbackdir.."/"..v.path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[l_id].mac:gsub('%W','')); end;
+								if tostring(v.enable) == "1" and v.type == "dyndisk" and mkyboot.cfg.wks[l_id].tid ~= nil and mkyboot.inc.isFile(v.nbd) then
+								if tostring(mkyboot.cfg.server.debug) == "1" then print(mkyboot.cfg.wks[l_id].tid); end;
+									if tostring(mkyboot.cfg.server.debug) == "1" then ngx.say("ADD 1:  :  : NUM:",mkyboot.cfg.wks[l_id].tid,i,v.nbd); end;
+									mkyboot.cmd.lun.add(mkyboot.cfg.wks[l_id].tid,i,v.nbd)
 								end;
-								if tostring(v.enable) == "1" and v.type == "dynblock" and nsboot.cfg.wks[l_id].tid ~= nil and nsboot.inc.isFile(v.nbd) then
-									if tostring(nsboot.cfg.server.debug) == "1" then ngx.say("ADD 1:  :  : NUM:",nsboot.cfg.wks[l_id].tid,i,v.nbd); end;
-									nsboot.cmd.lun.add(nsboot.cfg.wks[l_id].tid,i,v.nbd)
+								if tostring(v.enable) == "1" and v.type == "dynblock" and mkyboot.cfg.wks[l_id].tid ~= nil and mkyboot.inc.isFile(v.nbd) then
+									if tostring(mkyboot.cfg.server.debug) == "1" then ngx.say("ADD 1:  :  : NUM:",mkyboot.cfg.wks[l_id].tid,i,v.nbd); end;
+									mkyboot.cmd.lun.add(mkyboot.cfg.wks[l_id].tid,i,v.nbd)
 								end;
-								if tostring(v.enable) == "1" and v.type == "iso" then ngx.say("ADD 3: "..l_id.."  :  : NUM:",nsboot.cfg.server.imgisodir.."/"..v.path); end;
-								if tostring(v.enable) == "1" and v.type == "iso" and nsboot.cfg.wks[l_id].tid ~= nil and nsboot.inc.isFile(nsboot.cfg.server.imgisodir.."/"..v.path) then
-									if tostring(nsboot.cfg.server.debug) == "1" then ngx.say("ADD 1111:  :  : NUM:",nsboot.cfg.server.imgisodir.."/"..v.path); end;
-										ngx.say("PATH: ", nsboot.cfg.wks[l_id].tid,i,nsboot.cfg.server.imgisodir.."/"..v.path.." -Y cd")									
-									nsboot.cmd.lun.add(nsboot.cfg.wks[l_id].tid,i,nsboot.cfg.server.imgisodir.."/"..v.path.." -Y cd")
+								if tostring(v.enable) == "1" and v.type == "iso" then ngx.say("ADD 3: "..l_id.."  :  : NUM:",mkyboot.cfg.server.imgisodir.."/"..v.path); end;
+								if tostring(v.enable) == "1" and v.type == "iso" and mkyboot.cfg.wks[l_id].tid ~= nil and mkyboot.inc.isFile(mkyboot.cfg.server.imgisodir.."/"..v.path) then
+									if tostring(mkyboot.cfg.server.debug) == "1" then ngx.say("ADD 1111:  :  : NUM:",mkyboot.cfg.server.imgisodir.."/"..v.path); end;
+										ngx.say("PATH: ", mkyboot.cfg.wks[l_id].tid,i,mkyboot.cfg.server.imgisodir.."/"..v.path.." -Y cd")									
+									mkyboot.cmd.lun.add(mkyboot.cfg.wks[l_id].tid,i,mkyboot.cfg.server.imgisodir.."/"..v.path.." -Y cd")
 								end;
 						end;
 					end;					
 				end;
 		end;
-		function nsboot:ImgCommit(id)
+		function mkyboot:ImgCommit(id)
 
 
 		end;
-		function nsboot:zfsmount(p_ip)
-			local l_id,zdest,zpoint = nsboot.inc.GetIDFromIPv4(p_ip)
+		function mkyboot:zfsmount(p_ip)
+			local l_id,zdest,zpoint = mkyboot.inc.GetIDFromIPv4(p_ip)
 			if l_id ~= nil then 
-				zpoint = nsboot.cfg.zfs.mpoint.."/"..nsboot.cfg.wks[l_id].mac:gsub('%W','');
-				zdest = nsboot.cfg.zfs.dpoint..nsboot.cfg.wks[l_id].mac:gsub('%W','');
+				zpoint = mkyboot.cfg.zfs.mpoint.."/"..mkyboot.cfg.wks[l_id].mac:gsub('%W','');
+				zdest = mkyboot.cfg.zfs.dpoint..mkyboot.cfg.wks[l_id].mac:gsub('%W','');
 			end;
-			if nsboot.cfg.wks[l_id] ~= nil  then nsboot:nbdFree(p_ip); nsboot.cmd.zfs.unmount(zpoint); nsboot.cmd.zfs.unsnap(zdest); lfs.rmdir(zpoint); while not nsboot.cmd.zfs.mtab(zdest) do  require("posix.unistd").sleep(1); nsboot.cmd.zfs.snap(zdest); lfs.mkdir(zpoint); nsboot.cmd.zfs.mount(zdest, zpoint); end;
-				for i,v in ipairs(nsboot.cfg.wks[l_id].img) do
+			if mkyboot.cfg.wks[l_id] ~= nil  then mkyboot:nbdFree(p_ip); mkyboot.cmd.zfs.unmount(zpoint); mkyboot.cmd.zfs.unsnap(zdest); lfs.rmdir(zpoint); while not mkyboot.cmd.zfs.mtab(zdest) do  require("posix.unistd").sleep(1); mkyboot.cmd.zfs.snap(zdest); lfs.mkdir(zpoint); mkyboot.cmd.zfs.mount(zdest, zpoint); end;
+				for i,v in ipairs(mkyboot.cfg.wks[l_id].img) do
 					if tostring(v.enable) == "1" and v.type == "dynblock" then
-						nsboot.cmd.zfs.unsnap(nsboot.cfg.zfs.snadev.."/"..v.path.."@"..nsboot.cfg.zfs.tmpname.."_"..nsboot.cfg.wks[l_id].mac:gsub('%W',''));
-						nsboot.cmd.zfs.snap(nsboot.cfg.zfs.snadev.."/"..v.path.."@"..nsboot.cfg.zfs.tmpname.."_"..nsboot.cfg.wks[l_id].mac:gsub('%W',''));
-						ngx.say("ZFS: "..nsboot.cfg.zfs.snadev.."/"..v.path.."@"..nsboot.cfg.zfs.tmpname.."_"..nsboot.cfg.wks[l_id].mac:gsub('%W',''))
+						mkyboot.cmd.zfs.unsnap(mkyboot.cfg.zfs.snadev.."/"..v.path.."@"..mkyboot.cfg.zfs.tmpname.."_"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''));
+						mkyboot.cmd.zfs.snap(mkyboot.cfg.zfs.snadev.."/"..v.path.."@"..mkyboot.cfg.zfs.tmpname.."_"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''));
+						ngx.say("ZFS: "..mkyboot.cfg.zfs.snadev.."/"..v.path.."@"..mkyboot.cfg.zfs.tmpname.."_"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''))
 					end;
 				end;
 			end;				
 		end;	
-		function nsboot:zfsdemount(p_ip)
-			local l_id,zdest,zpoint = nsboot.inc.GetIDFromIPv4(p_ip)
-			if l_id ~= nil then zpoint = nsboot.cfg.zfs.mpoint.."/"..nsboot.cfg.wks[l_id].mac:gsub('%W',''); zdest = nsboot.cfg.zfs.dpoint..nsboot.cfg.wks[l_id].mac:gsub('%W',''); 						end;
-			if nsboot.cfg.wks[l_id].img ~= nil  then nsboot:nbdFree(p_ip); nsboot.cmd.zfs.unmount(zpoint); nsboot.cmd.zfs.unsnap(zdest); lfs.rmdir(zpoint); end;	
+		function mkyboot:zfsdemount(p_ip)
+			local l_id,zdest,zpoint = mkyboot.inc.GetIDFromIPv4(p_ip)
+			if l_id ~= nil then zpoint = mkyboot.cfg.zfs.mpoint.."/"..mkyboot.cfg.wks[l_id].mac:gsub('%W',''); zdest = mkyboot.cfg.zfs.dpoint..mkyboot.cfg.wks[l_id].mac:gsub('%W',''); 						end;
+			if mkyboot.cfg.wks[l_id].img ~= nil  then mkyboot:nbdFree(p_ip); mkyboot.cmd.zfs.unmount(zpoint); mkyboot.cmd.zfs.unsnap(zdest); lfs.rmdir(zpoint); end;	
 
 
 		end;		
 	--[[===========================================================================================================================================================================================]]	
-	nsboot.inc.web = {}
-	nsboot.inc.web.pcListen = function() 
+	mkyboot.inc.web = {}
+	mkyboot.inc.web.pcListen = function() 
 		local k,v,i,l_id,l_supper,l_status
-			for k,v in ipairs(nsboot.cfg.wks) do
+			for k,v in ipairs(mkyboot.cfg.wks) do
 				if v ~= nil and v.name ~= nil then
 					-- if tostring(v.supper) == "1" then l_supper = '<b style="color:tomato;">YES</b>' else l_supper = "NO";
-					if tostring(v.supper) == "1" and nsboot:checkstatpc(v.ipv4) then  ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: tomato;  \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power on</td><td>yes</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</td></tr>"); 
-					elseif tostring(v.supper) == "1" and not nsboot:checkstatpc(v.ipv4) then ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: #f9c3b9;  \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power off</td><td>yes</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</h5></td></tr>"); 
-					elseif tostring(v.supper) == "0" and nsboot:checkstatpc(v.ipv4) then ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: #4e73df; \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power on</td><td>no</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</td></tr>");
-					elseif tostring(v.supper) == "0" and not nsboot:checkstatpc(v.ipv4) then ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: #868686;  \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power off</td><td>no</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</h5></td></tr>"); 
+					if tostring(v.supper) == "1" and mkyboot:checkstatpc(v.ipv4) then  ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: tomato;  \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power on</td><td>yes</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</td></tr>"); 
+					elseif tostring(v.supper) == "1" and not mkyboot:checkstatpc(v.ipv4) then ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: #f9c3b9;  \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power off</td><td>yes</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</h5></td></tr>"); 
+					elseif tostring(v.supper) == "0" and mkyboot:checkstatpc(v.ipv4) then ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: #4e73df; \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power on</td><td>no</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</td></tr>");
+					elseif tostring(v.supper) == "0" and not mkyboot:checkstatpc(v.ipv4) then ngx.say("<tr class=\"ContextMenuTr\" style=\"font-weight: 600;color: #868686;  \"><td><svg width=\"2em\" height=\"1em\" viewBox=\"0 0 16 16\" class=\"bi bi-tv-fill\" fill=\"currentColor\" xmlns=\"http://www.w3.org/2000/svg\"><path fill-rule=\"evenod\" d=\"M2.5 13.5A.5.5 0 0 1 3 13h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zM2 2h12s2 0 2 2v6s0 2-2 2H2s-2 0-2-2V4s0-2 2-2z\"/></svg></td><td>",v.tid,"</td><td>",v.name,"</td><td>",v.ipv4,"</td><td>",v.mac,"</td><td>power off</td><td>no</td><td>",v.fileboot,"</td><td>",v.img[1].path,"</td><td>",v.img[2].path,"</td><td>",v.img[3].path,"</h5></td></tr>"); 
 					end;
 					
   				 end;
@@ -666,91 +666,91 @@
 		k,v,i,l_id,l_supper,l_status = nil,nil,nil,nil,nil,nil
  --<tr><td>1</td><td>PC001</td><td>Germany</td><td>Alfreds Futterkiste</td><td>Maria Anders</td><td>Germany</td><td>Alfreds Futterkiste</td><td>Maria Anders</td><td>Germany</td></tr>
 	--[[===========================================================================================================================================================================================]]		
---return nsboot
-		function nsboot:GetPage()
-			nsboot.inc.monit()
+--return mkyboot
+		function mkyboot:GetPage()
+			mkyboot.inc.monit()
 			ngargs  = ngx.req.read_body();
 
-			if nsboot.inc.checkconf() then
+			if mkyboot.inc.checkconf() then
 				if ngx.var.arg_getmebootargs == ngx.var.remote_addr and ngx.var.remote_addr ~= "::1"  then
 					
-						local l_id,l_num,l_key = nsboot.inc.GetIDFromIPv4(ngx.var.remote_addr);
+						local l_id,l_num,l_key = mkyboot.inc.GetIDFromIPv4(ngx.var.remote_addr);
 						ngx.say("#!ipxe\n");
-						ngx.say("set  initiator-iqn "..nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','').."\n");
-						for l_num,l_key in ipairs(nsboot.cfg.wks[l_id].img) do
-							if tostring(l_key.boot) == "1" then  ngx.say("set root-path iscsi:${next-server}:"..nsboot.cfg.iscsi.proto..":"..nsboot.cfg.iscsi.port..":"..l_num..":"..nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','').."\n"); end;
-							if tostring(l_key.boot) == "2" then  ngx.say("set root0 iscsi:${next-server}:"..nsboot.cfg.iscsi.proto..":"..nsboot.cfg.iscsi.port..":"..l_num..":"..nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','').."\n"); end;
-							if tostring(l_key.boot) == "3" then  ngx.say("set root1 iscsi:${next-server}:"..nsboot.cfg.iscsi.proto..":"..nsboot.cfg.iscsi.port..":"..l_num..":"..nsboot.cfg.iscsi.iqn..":"..nsboot.cfg.wks[l_id].mac:gsub('%W','').."\n"); end;
+						ngx.say("set  initiator-iqn "..mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','').."\n");
+						for l_num,l_key in ipairs(mkyboot.cfg.wks[l_id].img) do
+							if tostring(l_key.boot) == "1" then  ngx.say("set root-path iscsi:${next-server}:"..mkyboot.cfg.iscsi.proto..":"..mkyboot.cfg.iscsi.port..":"..l_num..":"..mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','').."\n"); end;
+							if tostring(l_key.boot) == "2" then  ngx.say("set root0 iscsi:${next-server}:"..mkyboot.cfg.iscsi.proto..":"..mkyboot.cfg.iscsi.port..":"..l_num..":"..mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','').."\n"); end;
+							if tostring(l_key.boot) == "3" then  ngx.say("set root1 iscsi:${next-server}:"..mkyboot.cfg.iscsi.proto..":"..mkyboot.cfg.iscsi.port..":"..l_num..":"..mkyboot.cfg.iscsi.iqn..":"..mkyboot.cfg.wks[l_id].mac:gsub('%W','').."\n"); end;
 						end;
-						ngx.say(nsboot.cfg.web.pages.ipxe.body:gsub("([\n])", '\n'));
-						ngx.say(nsboot.cfg.web.pages.ipxe.footer:gsub("([\n])", '\n'));
-						if  tostring(nsboot.cfg.wks[l_id].supper) == "1"  then
-							nsboot.inc.monit();
-							nsboot:tgtstop(ngx.var.remote_addr);
-							nsboot:nbdFree(ngx.var.remote_addr);
-							nsboot:zfsmount(ngx.var.remote_addr);
-							nsboot:mkChild(ngx.var.remote_addr);
-							nsboot:nbdConnect(ngx.var.remote_addr);
-							nsboot:LunAdd(ngx.var.remote_addr);
+						ngx.say(mkyboot.cfg.web.pages.ipxe.body:gsub("([\n])", '\n'));
+						ngx.say(mkyboot.cfg.web.pages.ipxe.footer:gsub("([\n])", '\n'));
+						if  tostring(mkyboot.cfg.wks[l_id].supper) == "1"  then
+							mkyboot.inc.monit();
+							mkyboot:tgtstop(ngx.var.remote_addr);
+							mkyboot:nbdFree(ngx.var.remote_addr);
+							mkyboot:zfsmount(ngx.var.remote_addr);
+							mkyboot:mkChild(ngx.var.remote_addr);
+							mkyboot:nbdConnect(ngx.var.remote_addr);
+							mkyboot:LunAdd(ngx.var.remote_addr);
 						else
-							nsboot.inc.monit();
-							nsboot:tgtstop(ngx.var.remote_addr);
-							nsboot:nbdFree(ngx.var.remote_addr);
-							nsboot:zfsmount(ngx.var.remote_addr);
-							nsboot:mkChild(ngx.var.remote_addr);
-							nsboot:nbdConnect(ngx.var.remote_addr);
-							nsboot:LunAdd(ngx.var.remote_addr);
+							mkyboot.inc.monit();
+							mkyboot:tgtstop(ngx.var.remote_addr);
+							mkyboot:nbdFree(ngx.var.remote_addr);
+							mkyboot:zfsmount(ngx.var.remote_addr);
+							mkyboot:mkChild(ngx.var.remote_addr);
+							mkyboot:nbdConnect(ngx.var.remote_addr);
+							mkyboot:LunAdd(ngx.var.remote_addr);
 						end;
-									-- nsboot:nbdFree("192.168.0.4");
-									-- nsboot:mkChild("192.168.0.4");
-									-- nsboot:nbdConnect("192.168.0.4")
-									-- nsboot:LunAdd("192.168.0.4");					
+									-- mkyboot:nbdFree("192.168.0.4");
+									-- mkyboot:mkChild("192.168.0.4");
+									-- mkyboot:nbdConnect("192.168.0.4")
+									-- mkyboot:LunAdd("192.168.0.4");					
 									-- ngx.say("#!ipxe\n:start\necho Boot menu\nmenu Selection\necho \"MY SHELL\"\nshell\n");
 
 
 			    elseif ngx.req.get_body_data() then
 			    		local file,temp,l_v,l_k
 			    			temp = json.decode(ngx.req.get_body_data():gsub('&','","'):gsub('^','{"post":{"'):gsub('=' ,'":"')..'"}}').post;
-			    			if nsboot.inc.isFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) then nsboot.cfg = nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) else nsboot.cfg = dofile("/srv/nsboot/cfg/cfg.lua").cfg; nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config,nsboot.cfg); end;
-			    				if temp['id'] ~= nil and temp['supper'] == "true" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] ~= nil then
-			    					nsboot.cfg =  nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config);
+			    			if mkyboot.inc.isFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) then mkyboot.cfg = mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) else mkyboot.cfg = dofile("/srv/mkyboot/cfg/cfg.lua").cfg; mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); end;
+			    				if temp['id'] ~= nil and temp['supper'] == "true" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] ~= nil then
+			    					mkyboot.cfg =  mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config);
 			    					if temp['jsondata'] ~= nil then 
 			    						local u_i,u_k
-			    							for u_i,u_k in ipairs(json.decode(nsboot.inc.unescape(temp['jsondata']))) do
-			    								nsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].commit = "1"
+			    							for u_i,u_k in ipairs(json.decode(mkyboot.inc.unescape(temp['jsondata']))) do
+			    								mkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].commit = "1"
 
 			    							end;
 			    						u_i,u_k = nil,nil
-			    					nsboot.cfg.wks[tonumber(temp['id'])].supper = "1"
-			    					nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config, nsboot.cfg);
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].supper = "1"
+			    					mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config, mkyboot.cfg);
 			    					end;
 			    					ngx.say("OK")
-			    				elseif temp['id'] ~= nil and temp['supper'] == "disableUncommit" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] then
-			    					nsboot.cfg =  nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config);
-			    					nsboot.cfg.wks[tonumber(temp['id'])].supper = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[1].commit = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[2].commit = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[3].commit = "0"
-			    					nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config, nsboot.cfg);
+			    				elseif temp['id'] ~= nil and temp['supper'] == "disableUncommit" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] then
+			    					mkyboot.cfg =  mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config);
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].supper = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[1].commit = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[2].commit = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[3].commit = "0"
+			    					mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config, mkyboot.cfg);
 			    					ngx.say("OK")
-			    				elseif temp['id'] ~= nil and temp['supper'] == "disableCommit" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] then
-			    					nsboot.cfg =  nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config);
+			    				elseif temp['id'] ~= nil and temp['supper'] == "disableCommit" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] then
+			    					mkyboot.cfg =  mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config);
 										if temp['id'] ~= nil then 
 			    						local u_i,u_k
-			    								if nsboot.cfg.wks[tonumber(temp['id'])] ~= nil and nsboot.cfg.wks[tonumber(temp['id'])].supper == "1" then
-			    									for u_i,u_k in pairs(nsboot.cfg.wks[tonumber(temp['id'])].img) do
-			    										if tostring(nsboot.cfg.wks[tonumber(temp['id'])].img[u_i].enable) == "1" and tostring(nsboot.cfg.wks[tonumber(temp['id'])].img[u_i].commit) == "1" and nsboot.cfg.wks[tonumber(temp['id'])].img[u_i].type ~= "iso" then
-			    											p_child = nsboot.cfg.server.imgbackdir.."/"..nsboot.cfg.wks[tonumber(temp['id'])].img[u_i].path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[tonumber(temp['id'])].mac:gsub('%W','');
-			    											if nsboot.inc.isFile(p_child) then
-			    													if nsboot.cfg.wks[tonumber(temp['id'])].ipv4 ~= nil then
-			    											 			nsboot:tgtstop(nsboot.cfg.wks[tonumber(temp['id'])].ipv4);
-																		nsboot:nbdFree(nsboot.cfg.wks[tonumber(temp['id'])].ipv4);
+			    								if mkyboot.cfg.wks[tonumber(temp['id'])] ~= nil and mkyboot.cfg.wks[tonumber(temp['id'])].supper == "1" then
+			    									for u_i,u_k in pairs(mkyboot.cfg.wks[tonumber(temp['id'])].img) do
+			    										if tostring(mkyboot.cfg.wks[tonumber(temp['id'])].img[u_i].enable) == "1" and tostring(mkyboot.cfg.wks[tonumber(temp['id'])].img[u_i].commit) == "1" and mkyboot.cfg.wks[tonumber(temp['id'])].img[u_i].type ~= "iso" then
+			    											p_child = mkyboot.cfg.server.imgbackdir.."/"..mkyboot.cfg.wks[tonumber(temp['id'])].img[u_i].path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[tonumber(temp['id'])].mac:gsub('%W','');
+			    											if mkyboot.inc.isFile(p_child) then
+			    													if mkyboot.cfg.wks[tonumber(temp['id'])].ipv4 ~= nil then
+			    											 			mkyboot:tgtstop(mkyboot.cfg.wks[tonumber(temp['id'])].ipv4);
+																		mkyboot:nbdFree(mkyboot.cfg.wks[tonumber(temp['id'])].ipv4);
 																	end;
-			    												-- while nsboot.cmd.img.used(p_child) do
+			    												-- while mkyboot.cmd.img.used(p_child) do
 			    												-- 	require("posix.unistd").sleep(0.5);
 			    												-- end;	
-			    												nsboot.cmd.img.commit(p_child);
-			    												ngx.say("Commited : ", p_child, " ",nsboot.cfg.wks[tonumber(temp['id'])].ipv4);
+			    												mkyboot.cmd.img.commit(p_child);
+			    												ngx.say("Commited : ", p_child, " ",mkyboot.cfg.wks[tonumber(temp['id'])].ipv4);
 			    											else
 			    												ngx.say("False");
 			    											end;
@@ -758,52 +758,52 @@
 			    										end;
 			    									end;
 			    								end;
-			    							--	p_child = nsboot.cfg.server.imgbackdir.."/"..nsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].commitnsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].path..nsboot.cfg.server.image_prefix..nsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].commitnsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].mac:gsub('%W','');
-												-- nsboot:tgtstop(nsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_i)].ipv4);
-												-- nsboot:nbdFree(nsboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_i)].ipv4);	
+			    							--	p_child = mkyboot.cfg.server.imgbackdir.."/"..mkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].commitmkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].path..mkyboot.cfg.server.image_prefix..mkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].commitmkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_k)].mac:gsub('%W','');
+												-- mkyboot:tgtstop(mkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_i)].ipv4);
+												-- mkyboot:nbdFree(mkyboot.cfg.wks[tonumber(temp['id'])].img[tonumber(u_i)].ipv4);	
 												
-						    					nsboot.cfg.wks[tonumber(temp['id'])].supper = "0"
+						    					mkyboot.cfg.wks[tonumber(temp['id'])].supper = "0"
 			    						u_i,u_k = nil,nil
 			    						end;
-			    					nsboot.cfg.wks[tonumber(temp['id'])].supper = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[1].commit = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[2].commit = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[3].commit = "0"
-			    					nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config, nsboot.cfg);
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].supper = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[1].commit = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[2].commit = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[3].commit = "0"
+			    					mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config, mkyboot.cfg);
 
 			    					ngx.say("OK")
-			    				elseif temp['id'] ~= nil and temp['supper'] == "disableCommitPoint" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] then
-			    					nsboot.cfg =  nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config);
-			    					nsboot.cfg.wks[tonumber(temp['id'])].supper = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[1].commit = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[2].commit = "0"
-			    					nsboot.cfg.wks[tonumber(temp['id'])].img[3].commit = "0"
-			    					nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config, nsboot.cfg);
+			    				elseif temp['id'] ~= nil and temp['supper'] == "disableCommitPoint" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] then
+			    					mkyboot.cfg =  mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config);
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].supper = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[1].commit = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[2].commit = "0"
+			    					mkyboot.cfg.wks[tonumber(temp['id'])].img[3].commit = "0"
+			    					mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config, mkyboot.cfg);
 			    					ngx.say("OK")
-			    				elseif temp['id'] ~= nil and temp['supper'] == "supperCheck" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] then
-			    						if tostring(nsboot.cfg.wks[tonumber(temp['id'])].supper) == "1" and nsboot:checkstatpc(nsboot.cfg.wks[tonumber(temp['id'])].ipv4) then
+			    				elseif temp['id'] ~= nil and temp['supper'] == "supperCheck" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] then
+			    						if tostring(mkyboot.cfg.wks[tonumber(temp['id'])].supper) == "1" and mkyboot:checkstatpc(mkyboot.cfg.wks[tonumber(temp['id'])].ipv4) then
 			    								ngx.say("2");
-			    						elseif tostring(nsboot.cfg.wks[tonumber(temp['id'])].supper) == "1" and not nsboot:checkstatpc(nsboot.cfg.wks[tonumber(temp['id'])].ipv4) then
+			    						elseif tostring(mkyboot.cfg.wks[tonumber(temp['id'])].supper) == "1" and not mkyboot:checkstatpc(mkyboot.cfg.wks[tonumber(temp['id'])].ipv4) then
 			    								ngx.say("1");
 			    						else
-			    								ngx.say(tostring(nsboot.cfg.wks[tonumber(temp['id'])].supper));
+			    								ngx.say(tostring(mkyboot.cfg.wks[tonumber(temp['id'])].supper));
 			    						end;
-			    				elseif temp['id'] ~= nil and temp['supper'] == "DiskList" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] then
+			    				elseif temp['id'] ~= nil and temp['supper'] == "DiskList" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] then
 			    					local t_data = {}, t_i
-			    						if nsboot.cfg.wks[tonumber(temp['id'])].img[1].path ~= nil and nsboot.cfg.wks[tonumber(temp['id'])].img[1].path ~= "none" and tostring(nsboot.cfg.wks[tonumber(temp['id'])].img[1].enable) == "1" then	t_data['1'] = nsboot.cfg.wks[tonumber(temp['id'])].img[1].path end;
-			    						if nsboot.cfg.wks[tonumber(temp['id'])].img[2].path ~= nil and nsboot.cfg.wks[tonumber(temp['id'])].img[2].path ~= "none" and tostring(nsboot.cfg.wks[tonumber(temp['id'])].img[2].enable) == "1" then	t_data['2'] = nsboot.cfg.wks[tonumber(temp['id'])].img[2].path end;
-			    						if nsboot.cfg.wks[tonumber(temp['id'])].img[3].path ~= nil and nsboot.cfg.wks[tonumber(temp['id'])].img[3].path ~= "none" and tostring(nsboot.cfg.wks[tonumber(temp['id'])].img[3].enable) == "1" then	t_data['3'] = nsboot.cfg.wks[tonumber(temp['id'])].img[3].path end;
+			    						if mkyboot.cfg.wks[tonumber(temp['id'])].img[1].path ~= nil and mkyboot.cfg.wks[tonumber(temp['id'])].img[1].path ~= "none" and tostring(mkyboot.cfg.wks[tonumber(temp['id'])].img[1].enable) == "1" then	t_data['1'] = mkyboot.cfg.wks[tonumber(temp['id'])].img[1].path end;
+			    						if mkyboot.cfg.wks[tonumber(temp['id'])].img[2].path ~= nil and mkyboot.cfg.wks[tonumber(temp['id'])].img[2].path ~= "none" and tostring(mkyboot.cfg.wks[tonumber(temp['id'])].img[2].enable) == "1" then	t_data['2'] = mkyboot.cfg.wks[tonumber(temp['id'])].img[2].path end;
+			    						if mkyboot.cfg.wks[tonumber(temp['id'])].img[3].path ~= nil and mkyboot.cfg.wks[tonumber(temp['id'])].img[3].path ~= "none" and tostring(mkyboot.cfg.wks[tonumber(temp['id'])].img[3].enable) == "1" then	t_data['3'] = mkyboot.cfg.wks[tonumber(temp['id'])].img[3].path end;
 			    						ngx.say(json.encode(t_data));
 			    					t_data = nil
 			    				end
 			    				--[[ COMMAND GET WEB ADMIN ]]--
-			    				if temp['id'] ~= nil and temp['cmd'] == "PowerON" and nsboot.inc.checkconf() and nsboot.cfg.wks[tonumber(temp['id'])] ~= nil then
-			    							if tostring(nsboot.cfg.wks[tonumber(temp['id'])].enable) == "1" and nsboot.cfg.wks[tonumber(temp['id'])].mac ~= nil then
+			    				if temp['id'] ~= nil and temp['cmd'] == "PowerON" and mkyboot.inc.checkconf() and mkyboot.cfg.wks[tonumber(temp['id'])] ~= nil then
+			    							if tostring(mkyboot.cfg.wks[tonumber(temp['id'])].enable) == "1" and mkyboot.cfg.wks[tonumber(temp['id'])].mac ~= nil then
 			    										local l_k,l_v
-			    										for l_k,l_v in pairs(nsboot.cfg.server.ifaces) do
-			    											if nsboot.cfg.server.ifaces[l_k] ~= nil then
-			    												nsboot.cmd.power.on(nsboot.cfg.server.ifaces[l_k],nsboot.cfg.wks[tonumber(temp['id'])].mac)
-			    												ngx.say(nsboot.cfg.server.ifaces[l_k],nsboot.cfg.wks[tonumber(temp['id'])].mac)
+			    										for l_k,l_v in pairs(mkyboot.cfg.server.ifaces) do
+			    											if mkyboot.cfg.server.ifaces[l_k] ~= nil then
+			    												mkyboot.cmd.power.on(mkyboot.cfg.server.ifaces[l_k],mkyboot.cfg.wks[tonumber(temp['id'])].mac)
+			    												ngx.say(mkyboot.cfg.server.ifaces[l_k],mkyboot.cfg.wks[tonumber(temp['id'])].mac)
 			    											end;
 			    										end;
 			    										l_k,l_v = nil,nil
@@ -811,50 +811,50 @@
 			    				end;
 			    				if temp['id'] == "0" and temp['WKSCmd'] == "GetMy" then
 									local l_k,l_v,t_id	
-										for l_k,l_v in ipairs(nsboot.cfg.wks) do
+										for l_k,l_v in ipairs(mkyboot.cfg.wks) do
 											if l_v.empty == "true" then t_id = l_k break elseif l_k == tonumber(l_v.tid) then t_id = l_k + 1  end
 										end;
 										local l_dns,l_gw,l_dsearch,l_ip
-										if nsboot.cfg.dhcp.config.opt['domain-name-servers'] ~= nil then 
-											l_dns = nsboot.cfg.dhcp.config.opt['domain-name-servers'] 
-										elseif nsboot.cfg.server.dns1 ~= nil then  
-											l_dns = nsboot.cfg.server.dns1 
+										if mkyboot.cfg.dhcp.config.opt['domain-name-servers'] ~= nil then 
+											l_dns = mkyboot.cfg.dhcp.config.opt['domain-name-servers'] 
+										elseif mkyboot.cfg.server.dns1 ~= nil then  
+											l_dns = mkyboot.cfg.server.dns1 
 										else
 											l_dns = "127.0.0.1"
 										end;
-										if nsboot.cfg.dhcp.config.opt['routers'] ~= nil then 
-											l_gw = nsboot.cfg.dhcp.config.opt['routers'] 
-										elseif nsboot.cfg.server.gateway ~= nil then  
-											l_gw = nsboot.cfg.server.gateway
+										if mkyboot.cfg.dhcp.config.opt['routers'] ~= nil then 
+											l_gw = mkyboot.cfg.dhcp.config.opt['routers'] 
+										elseif mkyboot.cfg.server.gateway ~= nil then  
+											l_gw = mkyboot.cfg.server.gateway
 										else
 											l_gw = "127.0.0.1"
 										end;										
-										if nsboot.cfg.dhcp.config.opt['domain-name'] ~= nil then 
-											l_dsearch = nsboot.cfg.dhcp.config.opt['domain-name']
+										if mkyboot.cfg.dhcp.config.opt['domain-name'] ~= nil then 
+											l_dsearch = mkyboot.cfg.dhcp.config.opt['domain-name']
 										else
-											l_dsearch = "nsboot.local"
+											l_dsearch = "mkyboot.local"
 										end;
-										if nsboot.cfg.dhcp.config.sub[1].sub ~= nil then 
-											l_ip = nsboot.cfg.dhcp.config.sub[1].sub:gsub("[0-9]$",t_id)
+										if mkyboot.cfg.dhcp.config.sub[1].sub ~= nil then 
+											l_ip = mkyboot.cfg.dhcp.config.sub[1].sub:gsub("[0-9]$",t_id)
 										else
 											l_ip = "192.168.10."..temp['id']
 										end;
-										l_mac = nsboot.inc.isMacARP(l_ip):gsub('\n','')
-			    					ngx.say("{\"WKS\":{\"enable\":1,\"group\":\"DEFAULT\",\"gateway\":\""..l_gw.."\",\"dns\":\""..l_dns.."\",\"domainsearch\":\""..l_dsearch.."\",\"supper\":0,\"img\":[{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+2).."\",\"type\":\"dyndisk\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+3).."\",\"type\":\"dynblock\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd0\",\"type\":\"iso\",\"boot\":0,\"cache\":\"none\"}],\"fileboot\":\"ipxe\",\"mac\":\""..l_mac.."\",\"tid\":"..t_id..",\"ipv4\":\""..l_ip.."\",\"opt\":[],\"name\":\"PC00"..t_id.."\",\"swp\":0},\"images\":{\"dyndisk\":"..json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgdir))..",\"iso\":"..json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(nsboot.inc.ls_devices(nsboot.cfg.zfs.devpoint)).."},\"groups\":"..json.encode(nsboot.cfg.groups.wks).."}")
+										l_mac = mkyboot.inc.isMacARP(l_ip):gsub('\n','')
+			    					ngx.say("{\"WKS\":{\"enable\":1,\"group\":\"DEFAULT\",\"gateway\":\""..l_gw.."\",\"dns\":\""..l_dns.."\",\"domainsearch\":\""..l_dsearch.."\",\"supper\":0,\"img\":[{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+2).."\",\"type\":\"dyndisk\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+3).."\",\"type\":\"dynblock\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd0\",\"type\":\"iso\",\"boot\":0,\"cache\":\"none\"}],\"fileboot\":\"ipxe\",\"mac\":\""..l_mac.."\",\"tid\":"..t_id..",\"ipv4\":\""..l_ip.."\",\"opt\":[],\"name\":\"PC00"..t_id.."\",\"swp\":0},\"images\":{\"dyndisk\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgdir))..",\"iso\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(mkyboot.inc.ls_devices(mkyboot.cfg.zfs.devpoint)).."},\"groups\":"..json.encode(mkyboot.cfg.groups.wks).."}")
 				   				l_k,l_v = nil,nil
 				   				l_dns,l_gw,l_dsearch,l_ip = nil,nil
 				   				end;	
 			    				if temp['id'] ~= "0" and temp['WKSCmd'] == "GetMy" then
 									local t_id,t_temp,l_k,l_v = temp['id'], {}
-				   					  ngx.say("{\"WKS\":"..json.encode(nsboot.cfg.wks[tonumber(temp['id'])])..",".."\"images\":{\"dyndisk\":"..json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgdir))..",\"iso\":"..json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(nsboot.inc.ls_devices(nsboot.cfg.zfs.devpoint)).."},\"groups\":"..json.encode(nsboot.cfg.groups.wks).."}" )
+				   					  ngx.say("{\"WKS\":"..json.encode(mkyboot.cfg.wks[tonumber(temp['id'])])..",".."\"images\":{\"dyndisk\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgdir))..",\"iso\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(mkyboot.inc.ls_devices(mkyboot.cfg.zfs.devpoint)).."},\"groups\":"..json.encode(mkyboot.cfg.groups.wks).."}" )
 				   				l_k,l_v,t_temp = nil,nil
 				   				end;				   				
 				   				if temp['id'] ~= nil and temp['WKSCmd'] == "ApplyMy" and temp['jsondata'] then
-									local t_id,t_tmp = json.decode(nsboot.inc.unescape(temp['jsondata'])).WKS.tid,json.decode(nsboot.inc.unescape(temp['jsondata'])).WKS
-											if nsboot.cfg.wks ~= nil and nsboot.cfg.wks[t_id] == nil then
-												nsboot.cfg.wks[tonumber(t_id)] = t_tmp
-												nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config,nsboot.cfg); 
-												nsboot:ExportDHCP();
+									local t_id,t_tmp = json.decode(mkyboot.inc.unescape(temp['jsondata'])).WKS.tid,json.decode(mkyboot.inc.unescape(temp['jsondata'])).WKS
+											if mkyboot.cfg.wks ~= nil and mkyboot.cfg.wks[t_id] == nil then
+												mkyboot.cfg.wks[tonumber(t_id)] = t_tmp
+												mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); 
+												mkyboot:ExportDHCP();
 												ngx.say("SAVE CONFIGURATIONS JSON: ")
 
 											end;
@@ -866,14 +866,14 @@
 				   				end;
 				   				if temp['id'] ~= nil and temp['WKSCmd'] == "DeleteMachine" then
 				   							
-				   								--ngx.say(nsboot.cfg.wks[tonumber(temp['id'])].tid)
+				   								--ngx.say(mkyboot.cfg.wks[tonumber(temp['id'])].tid)
 				   								local tmpfile = io.open("/tmp/fack", "a")
-				   								--tmpfile:write(json.encode(nsboot.cfg.wks))
-				   								if nsboot.cfg.wks[tonumber(temp['id'])] ~= nil and tostring(nsboot.cfg.wks[tonumber(temp['id'])].tid) == tostring(temp['id'])  then  nsboot.cfg.wks[tonumber(temp['id'])] = {} nsboot.cfg.wks[tonumber(temp['id'])].empty = "true" else ngx.say("ERROR") end --
+				   								--tmpfile:write(json.encode(mkyboot.cfg.wks))
+				   								if mkyboot.cfg.wks[tonumber(temp['id'])] ~= nil and tostring(mkyboot.cfg.wks[tonumber(temp['id'])].tid) == tostring(temp['id'])  then  mkyboot.cfg.wks[tonumber(temp['id'])] = {} mkyboot.cfg.wks[tonumber(temp['id'])].empty = "true" else ngx.say("ERROR") end --
 				   								
-				   								tmpfile:write(json.encode(nsboot.cfg.wks))
+				   								tmpfile:write(json.encode(mkyboot.cfg.wks))
 				   								tmpfile:close()
-				   								nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config,nsboot.cfg); 
+				   								mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); 
 				   								 
 				   								
 				   				end;
@@ -882,28 +882,28 @@
 								t_id = "1"
 							ngx.say("<html><body><pre>") 
 
-							nsboot.inc.monit();
-							nsboot:tgtstop("192.168.0.4");
-							nsboot:nbdFree("192.168.0.4");
-							nsboot:zfsmount("192.168.0.4");
-							nsboot:mkChild("192.168.0.4");
-							nsboot:nbdConnect("192.168.0.4");
-							nsboot:LunAdd("192.168.0.4");
+							mkyboot.inc.monit();
+							mkyboot:tgtstop("192.168.0.4");
+							mkyboot:nbdFree("192.168.0.4");
+							mkyboot:zfsmount("192.168.0.4");
+							mkyboot:mkChild("192.168.0.4");
+							mkyboot:nbdConnect("192.168.0.4");
+							mkyboot:LunAdd("192.168.0.4");
 							ngx.say("GOOD!")
-										-- ngx.say(nsboot.inc.search_nbd())
-									-- ngx.say(nsboot.inc.getpid_nbd("/srv/writeback/win10cc.qcow2_child_b42e992cdddf"))
-									-- ngx.say(nsboot.inc.getpid_nbd("/srv/writeback/lord.qcow2_child_b42e992cdddf"))
-									if 	nsboot.inc.getpid_nbd("/srv/writeback/Win10_2004_Russian_x64.iso_child_b42e992cdddf") ~= nil then	ngx.say(nsboot.inc.getpid_nbd("/srv/writeback/Win10_2004_Russian_x64.iso_child_b42e992cdddf")) end;
-										--ngx.say(nsboot.inc.getdev_nbd(nsboot.inc.getpid_nbd("/srv/writeback/win10cc.qcow2_child_b42e992cdddf")))
-								--		ngx.say(nsboot.inc.isMacARP("192.168.0.4"))
-							-- ngx.say("{\"WKS\"={\"enable\":1,\"group\":\"DEFAULT\",\"gateway\":\"DEFAULT\",\"dns\":\"DEFAULT\",\"domainsearch\":\"DEFAULT\",\"supper\":0,\"img\":[{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+2).."\",\"type\":\"dyndisk\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+3).."\",\"type\":\"dynblock\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd0\",\"type\":\"iso\",\"boot\":0,\"cache\":\"none\"}],\"fileboot\":\"ipxe\",\"mac\":\"\",\"tid\":"..t_id..",\"ipv4\":\"\",\"opt\":[],\"name\":\"PC00"..t_id.."\",\"swp\":0},\"images\":{\"dyndisk\":"..json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgdir))..",\"iso\":"..json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(nsboot.inc.ls_devices(nsboot.cfg.zfs.devpoint)).."},\"groups\""..json.encode(nsboot.cfg.groups.wks).."}")
-							-- --ngx.say(json.encode(nsboot.inc.ls_files(nsboot.cfg.server.imgdir)))
+										-- ngx.say(mkyboot.inc.search_nbd())
+									-- ngx.say(mkyboot.inc.getpid_nbd("/srv/writeback/win10cc.qcow2_child_b42e992cdddf"))
+									-- ngx.say(mkyboot.inc.getpid_nbd("/srv/writeback/lord.qcow2_child_b42e992cdddf"))
+									if 	mkyboot.inc.getpid_nbd("/srv/writeback/Win10_2004_Russian_x64.iso_child_b42e992cdddf") ~= nil then	ngx.say(mkyboot.inc.getpid_nbd("/srv/writeback/Win10_2004_Russian_x64.iso_child_b42e992cdddf")) end;
+										--ngx.say(mkyboot.inc.getdev_nbd(mkyboot.inc.getpid_nbd("/srv/writeback/win10cc.qcow2_child_b42e992cdddf")))
+								--		ngx.say(mkyboot.inc.isMacARP("192.168.0.4"))
+							-- ngx.say("{\"WKS\"={\"enable\":1,\"group\":\"DEFAULT\",\"gateway\":\"DEFAULT\",\"dns\":\"DEFAULT\",\"domainsearch\":\"DEFAULT\",\"supper\":0,\"img\":[{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+2).."\",\"type\":\"dyndisk\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+3).."\",\"type\":\"dynblock\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd0\",\"type\":\"iso\",\"boot\":0,\"cache\":\"none\"}],\"fileboot\":\"ipxe\",\"mac\":\"\",\"tid\":"..t_id..",\"ipv4\":\"\",\"opt\":[],\"name\":\"PC00"..t_id.."\",\"swp\":0},\"images\":{\"dyndisk\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgdir))..",\"iso\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(mkyboot.inc.ls_devices(mkyboot.cfg.zfs.devpoint)).."},\"groups\""..json.encode(mkyboot.cfg.groups.wks).."}")
+							-- --ngx.say(json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgdir)))
 			   				ngx.say("</pre></body></html>")
 			   	l_k,l_v = nil,nil
 			   elseif ngx.var.arg_status == "true" then
-			   		if nsboot.inc.isFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) then nsboot.cfg = nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) else nsboot.cfg = dofile("/srv/nsboot/cfg/cfg.lua").cfg; nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config,nsboot.cfg); end;
-					ngx.say(nsboot.cfg.web.pages.html.main);
-					nsboot.inc.web.pcListen();
+			   		if mkyboot.inc.isFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) then mkyboot.cfg = mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) else mkyboot.cfg = dofile("/srv/mkyboot/cfg/cfg.lua").cfg; mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); end;
+					ngx.say(mkyboot.cfg.web.pages.html.main);
+					mkyboot.inc.web.pcListen();
 					ngx.say(os.date(),[[</table>
 						<style>
 						.bd-example-modal-lg .modal-dialog{
@@ -1242,7 +1242,7 @@
 							</div>
 						</div>	
 								<script>
-								]]..nsboot.cfg.web.bootstrap.js..[[
+								]]..mkyboot.cfg.web.bootstrap.js..[[
 								</script>
 				        <script>
 				        var mResponse = {};
@@ -1590,7 +1590,7 @@
 					ngx.say("</body></html>");			    			
 			    			
 			    else
-							if nsboot.inc.isFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) then nsboot.cfg = nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) else nsboot.cfg = dofile("/srv/nsboot/cfg/cfg.lua").cfg; nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config,nsboot.cfg); end;
+							if mkyboot.inc.isFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) then mkyboot.cfg = mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) else mkyboot.cfg = dofile("/srv/mkyboot/cfg/cfg.lua").cfg; mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); end;
 			   				ngx.say([[
 					<!DOCTYPE html>
 					<html>
@@ -1811,7 +1811,7 @@ Workstations
 <div class="toptab">
 <b><h3>Workstations</h3></b>
 </div>
-	<iframe seamless allow="fullscreen" src="http://]]..ngx.var.host..[[:]]..tostring(nsboot.cfg.server.listen)..[[?status=true"  class="iframe" id="frame1" name="mainFrame" frameborder="0" scrolling="no" onload="resizeIframe1(this);"></iframe>
+	<iframe seamless allow="fullscreen" src="http://]]..ngx.var.host..[[:]]..tostring(mkyboot.cfg.server.listen)..[[?status=true"  class="iframe" id="frame1" name="mainFrame" frameborder="0" scrolling="no" onload="resizeIframe1(this);"></iframe>
 </div>
 
 <div id="Shell" class="tabcontent">
@@ -1819,7 +1819,7 @@ Workstations
 <b><h3>Shell</h3></b>
 
 </div>
-	<iframe seamless allow="fullscreen" src="http://]]..ngx.var.host..[[:]]..tostring(nsboot.cfg.server.shell_port)..[["  class="iframe" id="frame1" name="mainFrame" frameborder="0" scrolling="no" onload="resizeIframe1(this);"></iframe>
+	<iframe seamless allow="fullscreen" src="http://]]..ngx.var.host..[[:]]..tostring(mkyboot.cfg.server.shell_port)..[["  class="iframe" id="frame1" name="mainFrame" frameborder="0" scrolling="no" onload="resizeIframe1(this);"></iframe>
 </div>
 
 <div id="Samba" class="tabcontent">
@@ -1866,11 +1866,11 @@ document.getElementById("defaultOpen").click();
 </body>
 </html> 
 
-			   					]]) --/*<iframe seamless src="http://]]..ngx.var.host..[[:]]..tostring(nsboot.cfg.server.shell_port)..[["  class="iframe" id="frame" name="mainFrame" scrolling="auto" ></iframe>*/
+			   					]]) --/*<iframe seamless src="http://]]..ngx.var.host..[[:]]..tostring(mkyboot.cfg.server.shell_port)..[["  class="iframe" id="frame" name="mainFrame" scrolling="auto" ></iframe>*/
 				end;
 			end;
 		end;
 	--[[===========================================================================================================================================================================================]]
 
-		if nsboot.inc.isFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) then nsboot.cfg = nsboot:LoadFromFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config) else nsboot.cfg = dofile("/srv/nsboot/cfg/cfg.lua").cfg; nsboot:SaveToFile(nsboot.cfg.server.workdir.."/"..nsboot.cfg.server.distdir.."/cfg/"..nsboot.cfg.server.config,nsboot.cfg); end;
-		nsboot:GetPage()
+		if mkyboot.inc.isFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) then mkyboot.cfg = mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) else mkyboot.cfg = dofile("/srv/mkyboot/cfg/cfg.lua").cfg; mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); end;
+		mkyboot:GetPage()

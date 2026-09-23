@@ -1,4 +1,4 @@
-#!/usr/bin/lua
+﻿#!/usr/bin/lua
 
 
 -- local socket = require("socket")
@@ -41,7 +41,7 @@
 
 -- end
 local posix = require "posix"
-local SOCKET="/tmp/socket_nsboot"
+local SOCKET="/tmp/socket_mkyboot"
 -- Server code
 function StartServerSocket()
 	local libsocket = require "socket"
@@ -86,7 +86,7 @@ function StartServerSocket()
 end;
 
 while true do
-	io.open("/run/nsbootd.pid", "w"):write(require("posix").getpid().pid):close()
+	io.open("/run/mkybootd.pid", "w"):write(require("posix").getpid().pid):close()
 	os.remove(SOCKET)
 
 	StartServerSocket()

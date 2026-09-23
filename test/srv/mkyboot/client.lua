@@ -1,4 +1,4 @@
-#!/usr/bin/lua
+﻿#!/usr/bin/lua
 -- local socket = require("socket")
 -- socket.unix = require"socket.unix"
 -- local posix = require("posix")
@@ -24,9 +24,9 @@ function GetCommandClient(p_dev,p_path,p_cache)
 	local socket = require"socket"
 	socket.unix = require"socket.unix"
 	local c = assert(socket.unix())
-	assert(c:connect("/tmp/socket_nsboot"))
+	assert(c:connect("/tmp/socket_mkyboot"))
 	--c:send(argum1.." "..argum2.."\n")
-	--/srv/nsboot/client.lua /usr/bin/qemu-nbd '--connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid "..p_flags.."'"
+	--/srv/mkyboot/client.lua /usr/bin/qemu-nbd '--connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid "..p_flags.."'"
 	c:send("/usr/bin/qemu-nbd --fork --connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid --discard=unmap --cache="..p_cache.."\n")
 	if data ~= nil then data=assert(c:receive()) print("Got line: " .. data) end                         
 	
@@ -42,7 +42,7 @@ function isFile(name)
 end;
 
 function WaitSocketReady()
-	while not  isFile("/tmp/socket_nsboot") do
+	while not  isFile("/tmp/socket_mkyboot") do
 		require("posix.unistd").sleep(0.5);
 	end;
 end;

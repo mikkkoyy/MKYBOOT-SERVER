@@ -1,4 +1,4 @@
-#!/bin/sh
+﻿#!/bin/sh
 
 ### BEGIN INIT INFO
 # Provides:	  nginx
@@ -11,9 +11,9 @@
 ### END INIT INFO
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-DAEMON=/usr/bin/nsbootd
-NAME=nsbootd
-DESC=nsbootd
+DAEMON=/usr/bin/mkybootd
+NAME=mkybootd
+DESC=mkybootd
 
 # Include nginx defaults if available
 
@@ -35,7 +35,7 @@ if [ -n "$ULIMIT" ]; then
 	ulimit $ULIMIT
 fi
 
-start_nsbootd() {
+start_mkybootd() {
 	# Start the daemon/service
 	#
 	# Returns:
@@ -50,7 +50,7 @@ start_nsbootd() {
 }
 
 
-stop_nsbootd() {
+stop_mkybootd() {
 	# Stops the daemon/service
 	#
 	# Return
@@ -64,14 +64,14 @@ stop_nsbootd() {
 	return "$RETVAL"
 }
 
-reload_nsbootd() {
+reload_mkybootd() {
 	# Function that sends a SIGHUP to the daemon/service
 	start-stop-daemon --stop --signal HUP --quiet --pidfile $PID --name $NAME
 	return 0
 }
 
 
-upgrade_nsbootd() {
+upgrade_mkybootd() {
 	# Online upgrade nginx executable
 	# http://nginx.org/en/docs/control.html
 	#
@@ -103,7 +103,7 @@ upgrade_nsbootd() {
 case "$1" in
 	start)
 		log_daemon_msg "Starting $DESC" "$NAME"
-		start_nsbootd
+		start_mkybootd
 		case "$?" in
 			0|1) log_end_msg 0 ;;
 			2)   log_end_msg 1 ;;
@@ -111,7 +111,7 @@ case "$1" in
 		;;
 	stop)
 		log_daemon_msg "Stopping $DESC" "$NAME"
-		stop_nsbootd
+		stop_mkybootd
 		case "$?" in
 			0|1) log_end_msg 0 ;;
 			2)   log_end_msg 1 ;;
@@ -126,7 +126,7 @@ case "$1" in
 			exit $?
 		fi
 
-		stop_nsbootd
+		stop_mkybootd
 		case "$?" in
 			0|1)
 				start_nginx
@@ -156,7 +156,7 @@ case "$1" in
 			exit $?
 		fi
 
-		reload_nsbootd
+		reload_mkybootd
 		log_end_msg $?
 		;;
 	configtest|testconfig)
