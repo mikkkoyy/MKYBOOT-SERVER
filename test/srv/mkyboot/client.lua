@@ -1,49 +1,59 @@
 ﻿#!/usr/bin/lua
--- local socket = require("socket")
--- socket.unix = require"socket.unix"
--- local posix = require("posix")
--- local host, port = "127.0.0.1", 51515
--- local tcp = assert(socket.tcp())
 
--- tcp:connect(host, port);
--- tcp:send(io.read()..'\n');
+local SOCKET = "/tmp/socket_mkyboot"
 
--- while true do
---     local s, status, partial = tcp:receive()
---     print(s or partial)
---     if status == "closed" then
---       break
---     end
--- end
+local function isFile(name)
+	local posix = require("posix")
+	if name ~= nil and posix.stat(name) ~= nil then return true else return false end
+end
 
+local function WaitSocketReady()
+	local attempts = 0
+	while not isFile(SOCKET) do
+		require("posix.unistd").sleep(0.5)
+		attempts = attempts + 1
+		if attempts > 60 then
+			io.stderr:write("ERROR: socket_mkyboot not found after 30 seconds\n")
+			os.exit(1)
+		end
+	end
+end
 
-
--- tcp:close()
--- Client code
-function GetCommandClient(p_dev,p_path,p_cache)
+local function SendCommand(op, args)
 	local socket = require"socket"
 	socket.unix = require"socket.unix"
 	local c = assert(socket.unix())
-	assert(c:connect("/tmp/socket_mkyboot"))
-	--c:send(argum1.." "..argum2.."\n")
-	--/srv/mkyboot/client.lua /usr/bin/qemu-nbd '--connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid "..p_flags.."'"
-	c:send("/usr/bin/qemu-nbd --fork --connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid --discard=unmap --cache="..p_cache.."\n")
-	if data ~= nil then data=assert(c:receive()) print("Got line: " .. data) end                         
-	
-	c:close();
-end;
-function isFile(name)
-			local posix = require("posix")
-	        if name ~= nil and posix.stat(name) ~= nil then return true else return false end;
-	        -- note that the short evaluation is to
-	        -- return false instead of a possible nil
+	assert(c:connect(SOCKET))
 
-	    return false
-end;
+	local json = require("json")
+	local request = json.encode({ op = op, args = args })
+	c:send(request .. "\n")
 
-function WaitSocketReady()
-	while not  isFile("/tmp/socket_mkyboot") do
-		require("posix.unistd").sleep(0.5);
-	end;
-end;
-if arg[1] ~= nil and arg[2] ~= nil and arg[3] ~= nil then  WaitSocketReady(); GetCommandClient(arg[1],arg[2],arg[3]) end;
+	local response = c:receive()
+	c:close()
+
+	if response then
+		local ok, parsed = pcall(json.decode, response)
+		if ok and parsed.ok then
+			return true, parsed.result or "OK"
+		else
+			return false, parsed and parsed.error or "unknown error"
+		end
+	end
+	return false, "no response"
+end
+
+if arg[1] ~= nil and arg[2] ~= nil and arg[3] ~= nil then
+	WaitSocketReady()
+	local ok, result = SendCommand("nbd_connect", {
+		dev = arg[1],
+		path = arg[2],
+		cache = arg[3]
+	})
+	if ok then
+		print("OK: " .. tostring(result))
+	else
+		io.stderr:write("ERROR: " .. tostring(result) .. "\n")
+		os.exit(1)
+	end
+end

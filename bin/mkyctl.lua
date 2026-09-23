@@ -117,6 +117,130 @@
 			end)
 			if ok then return result else return nil end
 		end
+	--[[ SECURITY: Input validation for shell command parameters  ]]
+		mkyboot.inc.valid.dev_path = function(s)
+			if type(s) ~= "string" then return false end
+			return s:match("^/dev/nbd%d+$") ~= nil
+		end
+		mkyboot.inc.valid.lun_id = function(n)
+			local v = tonumber(n)
+			return v ~= nil and v >= 0 and v <= 255
+		end
+		mkyboot.inc.valid.pid = function(s)
+			if type(s) ~= "string" then return false end
+			return s:match("^%d+$") ~= nil and tonumber(s) > 0
+		end
+		mkyboot.inc.valid.img_size = function(s)
+			if type(s) ~= "string" then return false end
+			return s:match("^%d+[GMK]?$") ~= nil
+		end
+		mkyboot.inc.valid.cache_mode = function(s)
+			if type(s) ~= "string" then return false end
+			return s == "none" or s == "unsafe" or s == "writeback" or s == "directsync" or s == "writethrough"
+		end
+		mkyboot.inc.valid.service_name = function(s)
+			if type(s) ~= "string" then return false end
+			return s == "isc-dhcp-server" or s == "tftpd-hpa" or s == "tgt" or s == "nginx" or s == "mkybootd"
+		end
+		mkyboot.inc.valid.systemctl_cmd = function(s)
+			if type(s) ~= "string" then return false end
+			return s == "start" or s == "stop" or s == "restart" or s == "status" or s == "enable" or s == "disable"
+		end
+		mkyboot.inc.valid.safe_path = function(s)
+			if type(s) ~= "string" or #s == 0 or #s > 4096 then return false end
+			if s:find("[;|&`$(){}\n\r]") then return false end
+			if s:find("%.%.") then return false end
+			return true
+		end
+		mkyboot.inc.valid.img_path = function(s)
+			if type(s) ~= "string" or #s == 0 or #s > 256 then return false end
+			if s:find("[;|&`$(){}\n\r]") then return false end
+			if s:find("%.%.") then return false end
+			if s:match("[^%w%_%-%./]") then return false end
+			return true
+		end
+	--[[===========================================================================================================================================================================================]]
+	--[[ SECURITY: Password hashing and authentication module                                                                    ]]
+	--[[===========================================================================================================================================================================================]]
+		mkyboot.inc.auth = {}
+		mkyboot.inc.auth.file = "/srv/mkyboot/cfg/auth.json"
+		mkyboot.inc.auth.HASH_ITERATIONS = 10000
+
+		mkyboot.inc.auth.generate_salt = function()
+			local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+			local salt = ""
+			math.randomseed(ngx.now() * 1000000 + ngx.worker.pid() + os.time())
+			for i = 1, 32 do
+				local r = math.random(1, #chars)
+				salt = salt .. chars:sub(r, r)
+			end
+			return salt
+		end
+
+		mkyboot.inc.auth.hash_password = function(password, salt)
+			if type(password) ~= "string" or type(salt) ~= "string" then return nil end
+			local hash = salt .. ":" .. password
+			for i = 1, mkyboot.inc.auth.HASH_ITERATIONS do
+				local h = ngx.sha1_bin(hash)
+				local hex = ""
+				for j = 1, #h do
+					hex = hex .. string.format("%02x", string.byte(h, j))
+				end
+				hash = hex
+			end
+			return hash
+		end
+
+		mkyboot.inc.auth.verify_password = function(password, stored_hash, stored_salt)
+			if type(password) ~= "string" or type(stored_hash) ~= "string" or type(stored_salt) ~= "string" then return false end
+			local computed = mkyboot.inc.auth.hash_password(password, stored_salt)
+			if computed == nil then return false end
+			if #computed ~= #stored_hash then return false end
+			local result = 0
+			for i = 1, #computed do
+				result = bit.bor(result, string.byte(computed, i) ~ string.byte(stored_hash, i))
+			end
+			return result == 0
+		end
+
+		mkyboot.inc.auth.is_configured = function()
+			local fd = io.open(mkyboot.inc.auth.file, "r")
+			if fd then
+				fd:close()
+				return true
+			end
+			return false
+		end
+
+		mkyboot.inc.auth.setup_admin = function(password)
+			if type(password) ~= "string" or #password < 4 then return false, "password too short" end
+			local salt = mkyboot.inc.auth.generate_salt()
+			local hash = mkyboot.inc.auth.hash_password(password, salt)
+			if hash == nil then return false, "hash failed" end
+			local auth_data = { admin = { hash = hash, salt = salt, created = os.date("%Y-%m-%d %H:%M:%S") } }
+			local json_ok, json = pcall(require, "json")
+			if not json_ok then return false, "json unavailable" end
+			local fd = io.open(mkyboot.inc.auth.file, "w")
+			if not fd then return false, "cannot write auth file" end
+			fd:write(json.encode(auth_data))
+			fd:close()
+			mkyboot.inc.log.info("AUTH", "Admin password configured")
+			return true, "OK"
+		end
+
+		mkyboot.inc.auth.check_password = function(password)
+			if not mkyboot.inc.auth.is_configured() then return false, "not configured" end
+			local json_ok, json = pcall(require, "json")
+			if not json_ok then return false, "json unavailable" end
+			local fd = io.open(mkyboot.inc.auth.file, "r")
+			if not fd then return false, "cannot read auth file" end
+			local content = fd:read("*a")
+			fd:close()
+			local ok, data = pcall(json.decode, content)
+			if not ok or type(data) ~= "table" then return false, "invalid auth file" end
+			if type(data.admin) ~= "table" then return false, "invalid auth data" end
+			return mkyboot.inc.auth.verify_password(password, data.admin.hash, data.admin.salt), "OK"
+		end
 	--[[===========================================================================================================================================================================================]]
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
@@ -127,69 +251,169 @@
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
 	--[[===========================================================================================================================================================================================]]
 	  	mkyboot.cmd.tgt = 	{
-					new 		= function(opt,p_tid) 	return os.execute("/usr/sbin/tgtadm --lld iscsi --op new --mode target --tid "..p_tid.." -T "..opt); 									end, 					--CREATE TARGET
-					destroy		= function(opt) 		return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --mode target --tid "..opt); 												end, 					--REMOVE TARGET
-					kill		= function(opt) 		return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --force --mode target --tid "..opt); 										end, 					--FORCE REMOVE TARGET
-					show 		= function(opt) 		return os.execute("/usr/sbin/tgtadm --lld iscsi --op show --mode target "..opt); 														end, 					--INFO TARGETS
-					rules		= function(p_tid,opt)	return os.execute("/usr/sbin/tgtadm --lld iscsi --mode target --op bind --tid "..p_tid.." -I "..opt); 									end, 					--ALLOW CLIENT IP
-					unrul		= function(p_tid,opt)	return os.execute("/usr/sbin/tgtadm --lld iscsi --mode target --op unbind --tid "..p_tid.." -I "..opt); 								end,
-					used		= function(p_tgt) 		local fd; 																																---
-								  if os.execute("/usr/sbin/tgtadm --lld iscsi --op show --mode target | /usr/bin/grep --color \"Target [0-9]:\" | /usr/bin/grep "..p_tgt) ~= nil then
-								  fd = io.popen("/usr/sbin/tgtadm --lld iscsi --op show --mode target | /usr/bin/grep --color \"Target [0-9]:\" | /usr/bin/grep "..p_tgt);						---
-								  return (#fd:read("a*") > 0);
-								  else return false; end; 																																		end
-					};																																											---
-		mkyboot.cmd.lun = 	{																																									---
-							add		= function(p_tid,p_lun,p_dev) return os.execute("/usr/sbin/tgtadm --lld iscsi --op new --mode logicalunit --tid "..p_tid.." --lun "..p_lun.." -b "..p_dev); end,
-							del 	= function(p_tid,p_lun) return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --mode logicalunit --tid "..p_tid.." --lun "..p_lun);					end,
-							stop 	= function(p_opt) return os.execute("/usr/sbin/tgtadm --offline "..p_opt);																					end,
-							start 	= function(p_opt) return os.execute("/usr/sbin/tgtadm --ready "..p_opt);																					end
-					};																																											---
-		mkyboot.cmd.nbd = 	{																														
-							mod 	= function(p_max_part,p_nbds) return os.execute("/usr/sbin/modprobe nbd max_part "..p_max_part.." nbds "..p_nbds); 											end,
-							unmod 	= function() return os.execute("/usr/sbin/modprobe -r nbd"); 																								end,
-							add 	= function(p_dev,p_path,p_flags) os.execute("/srv/mkyboot/client.lua "..p_dev.." "..p_path.." "..p_flags);			
-									tmpfile = io.open("/tmp/debug","w")
-									tmpfile:write("/srv/mkyboot/client.lua /usr/bin/qemu-nbd '--connect="..p_dev.." "..p_path.." --pid-file="..p_path..".pid "..p_flags.."'")
-									tmpfile:close()
-								end,
-							del 	= function(p_dev) return os.execute("/usr/bin/qemu-nbd -d "..p_dev.." 2>/dev/null"); 																		end,
-							kill 	= function(p_pid) return os.execute("/usr/bin/kill -9 ", p_pid); 																							end,
-							used	= function(p_dev) if p_dev ~= nil and os.execute("/usr/bin/lsof -t "..p_dev.." 2>/dev/null") ~= nil then local fd; fd = io.popen("/usr/bin/lsof -t "..p_dev.." 2>/dev/null"); return (#fd:read("a*") > 0);	else return false end end,
-							usewho	= function(p_dev) local fd; 
-															if os.execute("/usr/bin/lsof -t "..p_dev.." | /usr/bin/grep \"$(/usr/bin/pgrep qemu-nbd)\"  2>/dev/null") ~= nil then 
-																fd = io.popen("/usr/bin/lsof -t "..p_dev.." | /usr/bin/grep \"$(/usr/bin/pgrep qemu-nbd)\"  2>/dev/null");							---
-																if fd ~= nil and (#fd:read("a*") > 0) then return 1 end;
-															 	else return false; end;																		---
-															if os.execute("/usr/bin/lsof -t "..p_dev.." | /usr/bin/grep \"$(/usr/bin/pgrep tgtd)\" 2>/dev/null") ~= nil then
-																fd = io.popen("/usr/bin/lsof -t "..p_dev.." | /usr/bin/grep \"$(/usr/bin/pgrep tgtd)\" 2>/dev/null");								---
-																if fd ~= nil and (#fd:read("a*") > 0) then return 2 end; else return false; end;												end
+					new 		= function(opt,p_tid)
+						if not mkyboot.inc.valid.tid(p_tid) then mkyboot.inc.log.warn("SECURITY", "tgt.new: invalid tid="..tostring(p_tid)); return false end
+						if not mkyboot.inc.valid.iqn(opt) then mkyboot.inc.log.warn("SECURITY", "tgt.new: invalid target name"); return false end
+						return os.execute("/usr/sbin/tgtadm --lld iscsi --op new --mode target --tid "..p_tid.." -T "..opt);
+					end,
+					destroy		= function(opt)
+						if not mkyboot.inc.valid.tid(opt) then mkyboot.inc.log.warn("SECURITY", "tgt.destroy: invalid tid="..tostring(opt)); return false end
+						return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --mode target --tid "..opt);
+					end,
+					kill		= function(opt)
+						if not mkyboot.inc.valid.tid(opt) then mkyboot.inc.log.warn("SECURITY", "tgt.kill: invalid tid="..tostring(opt)); return false end
+						return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --force --mode target --tid "..opt);
+					end,
+					show 		= function(opt) return os.execute("/usr/sbin/tgtadm --lld iscsi --op show --mode target"); end,
+					rules		= function(p_tid,opt)
+						if not mkyboot.inc.valid.tid(p_tid) then mkyboot.inc.log.warn("SECURITY", "tgt.rules: invalid tid="..tostring(p_tid)); return false end
+						if not mkyboot.inc.valid.ipv4(opt) then mkyboot.inc.log.warn("SECURITY", "tgt.rules: invalid ip="..tostring(opt)); return false end
+						return os.execute("/usr/sbin/tgtadm --lld iscsi --mode target --op bind --tid "..p_tid.." -I "..opt);
+					end,
+					unrul		= function(p_tid,opt)
+						if not mkyboot.inc.valid.tid(p_tid) then mkyboot.inc.log.warn("SECURITY", "tgt.unrul: invalid tid="..tostring(p_tid)); return false end
+						if not mkyboot.inc.valid.ipv4(opt) then mkyboot.inc.log.warn("SECURITY", "tgt.unrul: invalid ip="..tostring(opt)); return false end
+						return os.execute("/usr/sbin/tgtadm --lld iscsi --mode target --op unbind --tid "..p_tid.." -I "..opt);
+					end,
+					used		= function(p_tgt)
+						if type(p_tgt) ~= "string" or #p_tgt == 0 or #p_tgt > 128 then return false end
+						if p_tgt:find("[;|&`$()]") then mkyboot.inc.log.warn("SECURITY", "tgt.used: rejected metacharacters in="..p_tgt); return false end
+						local fd = io.popen("/usr/sbin/tgtadm --lld iscsi --op show --mode target 2>/dev/null | /usr/bin/grep \""..p_tgt.."\" 2>/dev/null")
+						local result = (#fd:read("a*") > 0)
+						fd:close()
+						return result
+					end
+					};
+		mkyboot.cmd.lun = 	{
+							add		= function(p_tid,p_lun,p_dev)
+								if not mkyboot.inc.valid.tid(p_tid) then mkyboot.inc.log.warn("SECURITY", "lun.add: invalid tid="..tostring(p_tid)); return false end
+								if not mkyboot.inc.valid.lun_id(p_lun) then mkyboot.inc.log.warn("SECURITY", "lun.add: invalid lun="..tostring(p_lun)); return false end
+								if not mkyboot.inc.valid.dev_path(p_dev) then mkyboot.inc.log.warn("SECURITY", "lun.add: invalid dev="..tostring(p_dev)); return false end
+								return os.execute("/usr/sbin/tgtadm --lld iscsi --op new --mode logicalunit --tid "..p_tid.." --lun "..p_lun.." -b "..p_dev);
+							end,
+							del 	= function(p_tid,p_lun)
+								if not mkyboot.inc.valid.tid(p_tid) then mkyboot.inc.log.warn("SECURITY", "lun.del: invalid tid="..tostring(p_tid)); return false end
+								if not mkyboot.inc.valid.lun_id(p_lun) then mkyboot.inc.log.warn("SECURITY", "lun.del: invalid lun="..tostring(p_lun)); return false end
+								return os.execute("/usr/sbin/tgtadm --lld iscsi --op delete --mode logicalunit --tid "..p_tid.." --lun "..p_lun);
+							end,
+							stop 	= function(p_opt)
+								if not mkyboot.inc.valid.tid(p_opt) then mkyboot.inc.log.warn("SECURITY", "lun.stop: invalid tid="..tostring(p_opt)); return false end
+								return os.execute("/usr/sbin/tgtadm --offline --tid "..p_opt);
+							end,
+							start 	= function(p_opt)
+								if not mkyboot.inc.valid.tid(p_opt) then mkyboot.inc.log.warn("SECURITY", "lun.start: invalid tid="..tostring(p_opt)); return false end
+								return os.execute("/usr/sbin/tgtadm --ready --tid "..p_opt);
+							end
+					};
+		mkyboot.cmd.nbd = 	{
+							mod 	= function(p_max_part,p_nbds)
+								local maxp = tonumber(p_max_part)
+								local nbds = tonumber(p_nbds)
+								if not maxp or maxp < 1 or maxp > 255 then mkyboot.inc.log.warn("SECURITY", "nbd.mod: invalid max_part="..tostring(p_max_part)); return false end
+								if not nbds or nbds < 1 or nbds > 256 then mkyboot.inc.log.warn("SECURITY", "nbd.mod: invalid nbds="..tostring(p_nbds)); return false end
+								return os.execute("/usr/sbin/modprobe nbd max_part "..p_max_part.." nbds "..p_nbds);
+							end,
+							unmod 	= function() return os.execute("/usr/sbin/modprobe -r nbd"); end,
+							add 	= function(p_dev,p_path,p_flags)
+								if not mkyboot.inc.valid.dev_path(p_dev) then mkyboot.inc.log.warn("SECURITY", "nbd.add: invalid dev="..tostring(p_dev)); return false end
+								if not mkyboot.inc.valid.safe_path(p_path) then mkyboot.inc.log.warn("SECURITY", "nbd.add: invalid path="..tostring(p_path)); return false end
+								if not mkyboot.inc.valid.cache_mode(p_flags) then mkyboot.inc.log.warn("SECURITY", "nbd.add: invalid cache="..tostring(p_flags)); return false end
+								os.execute("/srv/mkyboot/client.lua "..p_dev.." "..p_path.." "..p_flags);
+							end,
+							del 	= function(p_dev)
+								if not mkyboot.inc.valid.dev_path(p_dev) then mkyboot.inc.log.warn("SECURITY", "nbd.del: invalid dev="..tostring(p_dev)); return false end
+								return os.execute("/usr/bin/qemu-nbd -d "..p_dev.." 2>/dev/null");
+							end,
+							kill 	= function(p_pid)
+								if not mkyboot.inc.valid.pid(p_pid) then mkyboot.inc.log.warn("SECURITY", "nbd.kill: invalid pid="..tostring(p_pid)); return false end
+								return os.execute("/usr/bin/kill -9 "..p_pid);
+							end,
+							used	= function(p_dev)
+								if not mkyboot.inc.valid.dev_path(p_dev) then return false end
+								local fd = io.popen("/usr/bin/lsof -t "..p_dev.." 2>/dev/null")
+								local result = (#fd:read("a*") > 0)
+								fd:close()
+								return result
+							end,
+							usewho	= function(p_dev)
+								if not mkyboot.inc.valid.dev_path(p_dev) then return false end
+								local fd = io.popen("/usr/bin/lsof -t "..p_dev.." 2>/dev/null")
+								local out = fd:read("a*")
+								fd:close()
+								if #out == 0 then return false end
+								local fd2 = io.popen("/usr/bin/lsof -t "..p_dev.." 2>/dev/null | /usr/bin/xargs -I{} /usr/bin/cat /proc/{}/comm 2>/dev/null | /usr/bin/head -1")
+								local procname = fd2:read("*l") or ""
+								fd2:close()
+								if procname:find("qemu%-nbd") then return 1
+								elseif procname:find("tgtd") then return 2
+								else return false end
+							end
 					};
 		mkyboot.cmd.img = 	{
-							new 	= function(p_path,p_size) 
-									return os.execute("/usr/bin/qemu-img -f qcow2 -o preallocation=metadata,compat=1.1,lazy_refcounts=on encryption=off "..p_path.." "..p_size);				end,
-							child 	= function(p_parrent,p_child) 
-									return os.execute("/usr/bin/qemu-img create -f qcow2 -b "..p_parrent.." "..p_child.." -o lazy_refcounts=on 2>>/tmp/result ");								end,
-							del 	= function(p_image) return os.remove(p_image); 																												end,
-							commit 	= function(p_image) local fd; fd = io.popen("/usr/bin/qemu-img commit "..p_image); 																			end,
-							used 	= function(p_image) if os.execute("/usr/bin/lsof "..p_image.." 2>/dev/null") ~= nil then 
-								local fd; fd = io.popen("/usr/bin/lsof -t "..p_image.." 2>/dev/null"); return (#fd:read("a*") > 0);	else return false; end;										end
+							new 	= function(p_path,p_size)
+								if not mkyboot.inc.valid.img_path(p_path) then mkyboot.inc.log.warn("SECURITY", "img.new: invalid path="..tostring(p_path)); return false end
+								if not mkyboot.inc.valid.img_size(p_size) then mkyboot.inc.log.warn("SECURITY", "img.new: invalid size="..tostring(p_size)); return false end
+								return os.execute("/usr/bin/qemu-img -f qcow2 -o preallocation=metadata,compat=1.1,lazy_refcounts=on encryption=off "..p_path.." "..p_size);
+							end,
+							child 	= function(p_parrent,p_child)
+								if not mkyboot.inc.valid.img_path(p_parrent) then mkyboot.inc.log.warn("SECURITY", "img.child: invalid parent="..tostring(p_parrent)); return false end
+								if not mkyboot.inc.valid.img_path(p_child) then mkyboot.inc.log.warn("SECURITY", "img.child: invalid child="..tostring(p_child)); return false end
+								return os.execute("/usr/bin/qemu-img create -f qcow2 -b "..p_parrent.." "..p_child.." -o lazy_refcounts=on 2>>/tmp/result");
+							end,
+							del 	= function(p_image)
+								if not mkyboot.inc.valid.safe_path(p_image) then mkyboot.inc.log.warn("SECURITY", "img.del: invalid path="..tostring(p_image)); return false end
+								return os.remove(p_image);
+							end,
+							commit 	= function(p_image)
+								if not mkyboot.inc.valid.safe_path(p_image) then mkyboot.inc.log.warn("SECURITY", "img.commit: invalid path="..tostring(p_image)); return false end
+								local fd = io.popen("/usr/bin/qemu-img commit "..p_image.." 2>&1")
+								local result = fd:read("a*")
+								fd:close()
+								return result
+							end,
+							used 	= function(p_image)
+								if not mkyboot.inc.valid.safe_path(p_image) then return false end
+								local fd = io.popen("/usr/bin/lsof -t "..p_image.." 2>/dev/null")
+								local result = (#fd:read("a*") > 0)
+								fd:close()
+								return result
+							end
 							};
 
 		mkyboot.cmd.zfs =  	{
-							mtab 	= function(p_args) local fd_file, fd_data
-																fd_file = io.open("/etc/mtab", "r");  
-																fd_data = fd_file:read("*a");
-															 fd_file:close(); 
-															if string.find(fd_data,p_args) ~= nil then return true else return false; end;														end,
-							snap 	= function(p_data) 			 return os.execute("/usr/sbin/zfs snap "..p_data.." 2>/dev/null"); 																end,
-							unsnap 	= function(p_data) 			 return os.execute("/usr/sbin/zfs destroy -f "..p_data.." 2>/dev/null");														end,
-							mount 	= function(p_data,p_point)	 return os.execute("/usr/bin/mount -t zfs "..p_data.." "..p_point.." 2>>/var/log/messages"); 									end,
-							unmount  = function(p_point)			 return os.execute("/usr/bin/umount -f "..p_point.." 2>/dev/null");															end
+							mtab 	= function(p_args)
+								if type(p_args) ~= "string" or #p_args == 0 then return false end
+								if p_args:find("[;|&`$()]") then return false end
+								local fd_file = io.open("/etc/mtab", "r")
+								if not fd_file then return false end
+								local fd_data = fd_file:read("*a")
+								fd_file:close()
+								return string.find(fd_data, p_args) ~= nil
+							end,
+							snap 	= function(p_data)
+								if not mkyboot.inc.valid.safe_path(p_data) then mkyboot.inc.log.warn("SECURITY", "zfs.snap: invalid data="..tostring(p_data)); return false end
+								return os.execute("/usr/sbin/zfs snap "..p_data.." 2>/dev/null");
+							end,
+							unsnap 	= function(p_data)
+								if not mkyboot.inc.valid.safe_path(p_data) then mkyboot.inc.log.warn("SECURITY", "zfs.unsnap: invalid data="..tostring(p_data)); return false end
+								return os.execute("/usr/sbin/zfs destroy -f "..p_data.." 2>/dev/null");
+							end,
+							mount 	= function(p_data,p_point)
+								if not mkyboot.inc.valid.safe_path(p_data) then mkyboot.inc.log.warn("SECURITY", "zfs.mount: invalid data="..tostring(p_data)); return false end
+								if not mkyboot.inc.valid.safe_path(p_point) then mkyboot.inc.log.warn("SECURITY", "zfs.mount: invalid point="..tostring(p_point)); return false end
+								return os.execute("/usr/bin/mount -t zfs "..p_data.." "..p_point.." 2>>/var/log/messages");
+							end,
+							unmount  = function(p_point)
+								if not mkyboot.inc.valid.safe_path(p_point) then mkyboot.inc.log.warn("SECURITY", "zfs.unmount: invalid point="..tostring(p_point)); return false end
+								return os.execute("/usr/bin/umount -f "..p_point.." 2>/dev/null");
+							end
 							}
 		mkyboot.cmd.power = 	{
-
-							on = function(p_iface, p_mac) return os.execute("/usr/sbin/etherwake -i "..p_iface.." "..p_mac); 																end
+							on = function(p_iface, p_mac)
+								if type(p_iface) ~= "string" or not p_iface:match("^[%w%-]+$") then mkyboot.inc.log.warn("SECURITY", "power.on: invalid iface="..tostring(p_iface)); return false end
+								if not mkyboot.inc.valid.mac(p_mac) then mkyboot.inc.log.warn("SECURITY", "power.on: invalid mac="..tostring(p_mac)); return false end
+								return os.execute("/usr/sbin/etherwake -i "..p_iface.." "..p_mac);
+							end
 							}			
 
 
@@ -238,53 +462,54 @@
 			--if t_data ~= nil then  io.open("/tmp/debug.mkyboot","a"):write(t_data,"\n"):close() end;
 		end;
 		mkyboot.inc.lsof = function(p_patern)
-					if os.execute("/usr/bin/lsof "..p_patern.." 2>/dev/null") ~= nil then 
-					local fd; fd = io.popen("/usr/bin/lsof "..p_patern.." 2>/dev/null"); return (#fd:read("a*") > 0); 	
-					else 
-					return false; end;
-
+					if type(p_patern) ~= "string" or #p_patern == 0 or #p_patern > 256 then return false end
+					if p_patern:find("[;|&`$()]") then mkyboot.inc.log.warn("SECURITY", "lsof: rejected metacharacters"); return false end
+					local fd = io.popen("/usr/bin/lsof "..p_patern.." 2>/dev/null")
+					local result = (#fd:read("a*") > 0)
+					fd:close()
+					return result
 		end;
 		mkyboot.inc.lsofkill = function(p_path)
-					mkyboot.inc.debug("TUT 0")
-					if os.execute("/usr/bin/lsof -t "..p_path.." 2>/dev/null") ~= nil then 
-					local fd; fd = io.popen("/usr/bin/kill -9 $(/usr/bin/lsof -t "..p_path..") 2>/dev/null"); return (#fd:read("a*") > 0); 	
-					else 
-					return false; end;
-							 
+					if not mkyboot.inc.valid.safe_path(p_path) then mkyboot.inc.log.warn("SECURITY", "lsofkill: invalid path="..tostring(p_path)); return false end
+					local fd = io.popen("/usr/bin/lsof -t "..p_path.." 2>/dev/null")
+					local pids = fd:read("a*")
+					fd:close()
+					if #pids == 0 then return false end
+					for pid in pids:gmatch("%d+") do
+						os.execute("/usr/bin/kill -9 "..pid.." 2>/dev/null")
+					end
+					return true
 		end;
 		mkyboot.inc.search_nbd = function ()
 					for i_index = 1,mkyboot.cfg.server.nbd_nbds,1 do
-						mkyboot.inc.debug("TUT 2")
-						if os.execute("/usr/bin/lsof /dev/nbd"..i_index.." 2>/dev/null | /usr/bin/wc -l") ~= nil then 
-							local fd; fd = io.popen("/usr/bin/lsof /dev/nbd"..i_index.." 2>/dev/null | /usr/bin/wc -l"); if tonumber(fd:read("a*")) == 0 then return("/dev/nbd"..i_index);  end;
-						else 
-							return false; 
-						end;			
-					end;
+						local dev = "/dev/nbd"..i_index
+						local fd = io.popen("/usr/bin/lsof -t "..dev.." 2>/dev/null")
+						local pids = fd:read("a*") or ""
+						fd:close()
+						if #pids == 0 then return dev end
+					end
+					return false
 		end; 
 
 		mkyboot.inc.getpid_nbd = function (t_path)
-			local result
-			if t_path ~= nil and mkyboot.inc.isFile(t_path) then
-				if os.execute("/usr/bin/lsof -t "..t_path.." 2>/dev/null") ~= nil then 
-
-					local fd; fd = io.popen("/usr/bin/lsof -t "..t_path.." 2>/dev/null "); result = (fd:read("a*"));
-					if result == '' then return nil else return result end;
-				else
-					return nil
-				end; 
-			end;
-			result = nil
+			if t_path == nil or not mkyboot.inc.isFile(t_path) then return nil end
+			if not mkyboot.inc.valid.safe_path(t_path) then return nil end
+			local fd = io.popen("/usr/bin/lsof -t "..t_path.." 2>/dev/null")
+			local result = fd:read("a*") or ""
+			fd:close()
+			result = result:gsub("%s+", "")
+			if result == '' then return nil else return result end
 		end;
 		
 		mkyboot.inc.getdev_nbd = function (t_pid)
-			local result
-				if t_pid ~= nil and os.execute("/usr/bin/lsof -p "..t_pid:gsub('%W','').." 2>/dev/null |  /usr/bin/awk '/\\/dev\\/nbd/ { print $NF }' ") then 
-					local fd; fd = io.popen("/usr/bin/lsof -p "..t_pid:gsub('%W','').." 2>/dev/null |  /usr/bin/awk '/\\/dev\\/nbd/ { print $NF }' "); result = fd:read("a*") ;
-					if result == '' then return nil else return result end;
-				else
-					return nil;
-				end; 	
+			if t_pid == nil then return nil end
+			local clean_pid = tostring(t_pid):gsub('%W','')
+			if not mkyboot.inc.valid.pid(clean_pid) then return nil end
+			local fd = io.popen("/usr/bin/lsof -p "..clean_pid.." 2>/dev/null | /usr/bin/awk '/\\/dev\\/nbd/ { print $NF }' ")
+			local result = fd:read("a*") or ""
+			fd:close()
+			result = result:gsub("%s+", "")
+			if result == '' then return nil else return result end
 		end;
 
 		mkyboot.inc.scCheck	= function()
@@ -297,12 +522,14 @@
 				return result
 		end;
 		mkyboot.inc.systemctl = function(p_name,p_cmd)
+						if not mkyboot.inc.valid.service_name(p_name) then mkyboot.inc.log.warn("SECURITY", "systemctl: invalid service="..tostring(p_name)); return false end
+						if not mkyboot.inc.valid.systemctl_cmd(p_cmd) then mkyboot.inc.log.warn("SECURITY", "systemctl: invalid cmd="..tostring(p_cmd)); return false end
 						return os.execute("/usr/bin/systemctl "..p_cmd.." "..p_name)
 		end;
 		mkyboot.inc.monit = function()
 					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.dhcp.port) 	then mkyboot.inc.systemctl("isc-dhcp-server","start"); mkyboot.inc.systemctl("isc-dhcp-server","restart");	end;
-					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.tftp.port) 	then mkyboot.inc.systemctl("isc-dhcp-server","start"); mkyboot.inc.systemctl("tftpd-hpa","restart");	end;
-					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.iscsi.port) then mkyboot.inc.systemctl("isc-dhcp-server","start"); mkyboot.inc.systemctl("tgt","restart");	end;
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.tftp.port) 	then mkyboot.inc.systemctl("tftpd-hpa","start"); mkyboot.inc.systemctl("tftpd-hpa","restart");	end;
+					if not mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.iscsi.port) then mkyboot.inc.systemctl("tgt","start"); mkyboot.inc.systemctl("tgt","restart");	end;
 		end;
 		mkyboot.inc.GetMacFromIPv4 = function(p_ipv4)
 			if mkyboot.inc.checkconf() and p_ipv4 ~= nil then
@@ -386,10 +613,11 @@
 		end;
 	end;
 	function mkyboot.inc.isMacARP(p_ip)
-		local f_tmp,f_mac,f_data = os.tmpname()
+		if not mkyboot.inc.valid.ipv4(p_ip) then mkyboot.inc.log.warn("SECURITY", "isMacARP: invalid ip="..tostring(p_ip)); return "" end
+		local f_tmp = os.tmpname()
 		os.execute("/usr/sbin/arp -a "..p_ip.." | /usr/bin/awk '{ print $4 }' > "..f_tmp)
-		f_mac = io.open(f_tmp, "r")
-		f_data = f_mac:read("*a")
+		local f_mac = io.open(f_tmp, "r")
+		local f_data = f_mac:read("*a")
 		f_mac:close()
 		os.remove(f_tmp)
 		return f_data
@@ -595,9 +823,11 @@
 			end;				
 		end;
 		function mkyboot:checkstatpc(p_ip)
-			local fd,result 
-				fd = io.popen("/usr/sbin/tgtadm --lld iscsi --op show --mode target | /usr/bin/grep 'IP Address: "..p_ip.."'"); --/usr/sbin/tgtadm --lld iscsi --op show --mode target | grep --color "IP Address: 192.168.0.4"
-				return (#fd:read("a*") > 0);
+			if not mkyboot.inc.valid.ipv4(p_ip) then return false end
+			local fd = io.popen("/usr/sbin/tgtadm --lld iscsi --op show --mode target 2>/dev/null | /usr/bin/grep 'IP Address: "..p_ip.."' 2>/dev/null")
+			local result = (#fd:read("a*") > 0)
+			fd:close()
+			return result
 		end;
 	
 
@@ -925,11 +1155,60 @@
 							mkyboot:nbdConnect(ngx.var.remote_addr);
 							mkyboot:LunAdd(ngx.var.remote_addr);
 						end;
-									-- mkyboot:nbdFree("192.168.0.4");
-									-- mkyboot:mkChild("192.168.0.4");
-									-- mkyboot:nbdConnect("192.168.0.4")
-									-- mkyboot:LunAdd("192.168.0.4");					
-									-- ngx.say("#!ipxe\n:start\necho Boot menu\nmenu Selection\necho \"MY SHELL\"\nshell\n");
+
+			--[[ FIRST-RUN SETUP HANDLER ]]--
+			elseif ngx.var.arg_setup == "true" and ngx.req.get_method() == "POST" then
+				if mkyboot.inc.auth.is_configured() then
+					ngx.say("ERROR: Already configured")
+					return
+				end
+				local body = mkyboot.inc.parse_post(ngx.req.get_body_data())
+				if body == nil or body.password == nil or #body.password < 4 then
+					ngx.say("ERROR: Password must be at least 4 characters")
+					return
+				end
+				local ok, msg = mkyboot.inc.auth.setup_admin(body.password)
+				if ok then
+					ngx.say("OK")
+				else
+					ngx.say("ERROR: " .. tostring(msg))
+				end
+				return
+
+			--[[ LOGIN HANDLER ]]--
+			elseif ngx.var.arg_login == "true" and ngx.req.get_method() == "POST" then
+				local body = mkyboot.inc.parse_post(ngx.req.get_body_data())
+				if body == nil or body.login == nil or body.pass == nil then
+					mkyboot.inc.log.warn("AUTH", "Login attempt with missing credentials from "..ngx.var.remote_addr)
+					ngx.say("ERROR: Invalid request")
+					return
+				end
+				if not mkyboot.inc.auth.is_configured() then
+					ngx.say("ERROR: No admin configured. Use ?setup=true")
+					return
+				end
+				if body.login ~= "admin" then
+					mkyboot.inc.log.warn("AUTH", "Login attempt with invalid user '"..tostring(body.login).."' from "..ngx.var.remote_addr)
+					ngx.say("ERROR: Invalid credentials")
+					return
+				end
+				local ok, msg = mkyboot.inc.auth.check_password(body.pass)
+				if ok then
+					local token = mkyboot.inc.csrf.generate()
+					ngx.header["Set-Cookie"] = "mkyboot_token=" .. token .. "; Path=/; HttpOnly; SameSite=Strict"
+					mkyboot.inc.log.info("AUTH", "Successful login from "..ngx.var.remote_addr)
+					ngx.say("OK")
+				else
+					mkyboot.inc.log.warn("AUTH", "Failed login attempt from "..ngx.var.remote_addr)
+					ngx.say("ERROR: Invalid credentials")
+				end
+				return
+
+			--[[ LOGOUT HANDLER ]]--
+			elseif ngx.var.arg_logout == "true" then
+				ngx.header["Set-Cookie"] = "mkyboot_token=; Path=/; HttpOnly; Max-Age=0"
+				ngx.say("OK")
+				return
 
 
 			    elseif ngx.req.get_body_data() then
@@ -1109,29 +1388,6 @@
 				   								 
 				   								
 				   				end;
-			   elseif ngx.var.arg_testzone == "true" then
-				local l_k,l_v,t_id	
-								t_id = "1"
-							ngx.say("<html><body><pre>") 
-
-							mkyboot.inc.monit();
-							mkyboot:tgtstop("192.168.0.4");
-							mkyboot:nbdFree("192.168.0.4");
-							mkyboot:zfsmount("192.168.0.4");
-							mkyboot:mkChild("192.168.0.4");
-							mkyboot:nbdConnect("192.168.0.4");
-							mkyboot:LunAdd("192.168.0.4");
-							ngx.say("GOOD!")
-										-- ngx.say(mkyboot.inc.search_nbd())
-									-- ngx.say(mkyboot.inc.getpid_nbd("/srv/writeback/win10cc.qcow2_child_b42e992cdddf"))
-									-- ngx.say(mkyboot.inc.getpid_nbd("/srv/writeback/lord.qcow2_child_b42e992cdddf"))
-									if 	mkyboot.inc.getpid_nbd("/srv/writeback/Win10_2004_Russian_x64.iso_child_b42e992cdddf") ~= nil then	ngx.say(mkyboot.inc.getpid_nbd("/srv/writeback/Win10_2004_Russian_x64.iso_child_b42e992cdddf")) end;
-										--ngx.say(mkyboot.inc.getdev_nbd(mkyboot.inc.getpid_nbd("/srv/writeback/win10cc.qcow2_child_b42e992cdddf")))
-								--		ngx.say(mkyboot.inc.isMacARP("192.168.0.4"))
-							-- ngx.say("{\"WKS\"={\"enable\":1,\"group\":\"DEFAULT\",\"gateway\":\"DEFAULT\",\"dns\":\"DEFAULT\",\"domainsearch\":\"DEFAULT\",\"supper\":0,\"img\":[{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+2).."\",\"type\":\"dyndisk\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd"..(t_id+3).."\",\"type\":\"dynblock\",\"boot\":0,\"cache\":\"none\"},{\"path\":\"none\",\"commit\":0,\"enable\":1,\"nbd\":\"\\/dev\\/nbd0\",\"type\":\"iso\",\"boot\":0,\"cache\":\"none\"}],\"fileboot\":\"ipxe\",\"mac\":\"\",\"tid\":"..t_id..",\"ipv4\":\"\",\"opt\":[],\"name\":\"PC00"..t_id.."\",\"swp\":0},\"images\":{\"dyndisk\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgdir))..",\"iso\":"..json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgisodir))..",\"dynblock\":"..json.encode(mkyboot.inc.ls_devices(mkyboot.cfg.zfs.devpoint)).."},\"groups\""..json.encode(mkyboot.cfg.groups.wks).."}")
-							-- --ngx.say(json.encode(mkyboot.inc.ls_files(mkyboot.cfg.server.imgdir)))
-			   				ngx.say("</pre></body></html>")
-			   	l_k,l_v = nil,nil
 			   elseif ngx.var.arg_api == "status" then
 			   		ngx.header.content_type = 'application/json'
 			   		ngx.say(json.encode(mkyboot.inc.api.get_server_status()))
@@ -1161,6 +1417,17 @@
 			   		end
 			   		ngx.say(json.encode(lines))
 			   elseif ngx.var.arg_status == "true" then
+			   		--[[ CHECK AUTHENTICATION FOR ADMIN PAGES ]]--
+					if not mkyboot.inc.auth.is_configured() then
+						ngx.say(mkyboot.cfg.web.pages.html.setup)
+						return
+					end
+					local cookie = ngx.var.http_cookie or ""
+					local token = cookie:match("mkyboot_token=([^;]+)")
+					if not token or not mkyboot.inc.csrf.validate(token) then
+						ngx.say(mkyboot.cfg.web.pages.html.login)
+						return
+					end
 			   		if mkyboot.inc.isFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) then mkyboot.cfg = mkyboot:LoadFromFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config) else mkyboot.cfg = dofile("/srv/mkyboot/cfg/cfg.lua").cfg; mkyboot:SaveToFile(mkyboot.cfg.server.workdir.."/"..mkyboot.cfg.server.distdir.."/cfg/"..mkyboot.cfg.server.config,mkyboot.cfg); end;
 					ngx.say(mkyboot.cfg.web.pages.html.main);
 					mkyboot.inc.web.pcListen();

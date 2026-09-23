@@ -390,21 +390,100 @@ mkyboot.cfg.web.pages.html.login = [[
           <input type="password" name="pass" id="pass" required=" " value="">
           <label for="pass">PASSWORD</label>
         </div>
-        <div>
-          <small id="def">*Default login "<b>admin</b>" password "<b>0000</b>"</small>
-        </div>
+        <div id="login-error" style="color:#dc3545;display:none;margin:8px 0;"></div>
         <div class="group">
-          <button class="info" id="singIn">Sing in</button>
+          <button class="info" id="singIn" type="button" onclick="doLogin()">Sign in</button>
         </div>
       </div>
     </div>
   </div>
-  //= template/footer.html
-
+  <script>
+  function doLogin(){
+    var login=document.getElementById('login').value;
+    var pass=document.getElementById('pass').value;
+    var err=document.getElementById('login-error');
+    err.style.display='none';
+    if(!login||!pass){err.textContent='Please enter login and password';err.style.display='block';return;}
+    var xhr=new XMLHttpRequest();
+    xhr.open('POST','?login=true',true);
+    xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+    xhr.onload=function(){
+      if(xhr.responseText==='OK'){location.href='?status=true';}
+      else{err.textContent=xhr.responseText.replace('ERROR: ','');err.style.display='block';}
+    };
+    xhr.send('login='+encodeURIComponent(login)+'&pass='+encodeURIComponent(pass));
+  }
+  document.getElementById('pass').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});
+  document.getElementById('login').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});
+  </script>
 </body>
 
 </html>
 
+]]
+
+
+mkyboot.cfg.web.pages.html.setup = [[
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MKYBOOT - Initial Setup</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f5;}
+.card{background:#fff;padding:40px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);max-width:400px;width:100%;}
+h1{color:#4e73df;margin-bottom:8px;}
+p{color:#666;margin-bottom:20px;}
+label{display:block;margin-bottom:4px;font-weight:600;color:#333;}
+input[type="password"]{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;margin-bottom:12px;box-sizing:border-box;font-size:14px;}
+button{width:100%;padding:12px;background:#4e73df;color:#fff;border:none;border-radius:4px;font-size:16px;cursor:pointer;}
+button:hover{background:#3a5fc8;}
+.error{color:#dc3545;margin:8px 0;display:none;}
+.hint{color:#888;font-size:12px;margin-top:4px;}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>MKYBOOT Setup</h1>
+<p>Initial administrator configuration. Choose a strong password.</p>
+<div>
+<label>Admin Password</label>
+<input type="password" id="new-pass" placeholder="Enter password (min 4 characters)">
+<div class="hint">Password must be at least 4 characters.</div>
+</div>
+<div>
+<label>Confirm Password</label>
+<input type="password" id="confirm-pass" placeholder="Confirm password">
+</div>
+<div id="setup-error" class="error"></div>
+<div id="setup-success" style="color:#28a745;display:none;margin:8px 0;"></div>
+<button onclick="doSetup()">Configure Admin</button>
+</div>
+<script>
+function doSetup(){
+var p1=document.getElementById('new-pass').value;
+var p2=document.getElementById('confirm-pass').value;
+var err=document.getElementById('setup-error');
+var ok=document.getElementById('setup-success');
+err.style.display='none';ok.style.display='none';
+if(!p1||p1.length<4){err.textContent='Password must be at least 4 characters';err.style.display='block';return;}
+if(p1!==p2){err.textContent='Passwords do not match';err.style.display='block';return;}
+var xhr=new XMLHttpRequest();
+xhr.open('POST','?setup=true',true);
+xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+xhr.onload=function(){
+if(xhr.responseText==='OK'){
+ok.textContent='Admin configured! Redirecting to login...';ok.style.display='block';
+setTimeout(function(){location.href='?status=true';},2000);
+}else{err.textContent=xhr.responseText.replace('ERROR: ','');err.style.display='block';}
+};
+xhr.send('password='+encodeURIComponent(p1));
+}
+document.getElementById('confirm-pass').addEventListener('keydown',function(e){if(e.key==='Enter')doSetup();});
+</script>
+</body>
+</html>
 ]]
 
 
