@@ -266,6 +266,12 @@
 				return false, "already configured"
 			end
 			local user = username or "admin"
+			if type(user) ~= "string" or #user < 1 or #user > 64 then
+				return false, "invalid username"
+			end
+			if user:match("[%;%|%&%`%$%!%%%]") then
+				return false, "invalid username"
+			end
 			local salt = mkyboot.inc.auth.generate_salt()
 			if not salt then return false, "failed to generate salt" end
 			local hash = mkyboot.inc.auth.hash_password(password, salt)
@@ -276,6 +282,7 @@
 				iterations = mkyboot.inc.auth.HASH_ITERATIONS,
 				salt_bytes = mkyboot.inc.auth.SALT_BYTES,
 				admin = {
+					username = user,
 					hash = hash,
 					salt = salt,
 					created = os.date("!%Y-%m-%dT%H:%M:%SZ")
@@ -287,12 +294,22 @@
 			return true, "OK"
 		end
 
-		mkyboot.inc.auth.check_password = function(password)
+		mkyboot.inc.auth.get_username = function()
+			local data, msg = mkyboot.inc.auth.load_auth()
+			if not data or type(data.admin) ~= "table" then return "admin" end
+			return data.admin.username or "admin"
+		end
+
+		mkyboot.inc.auth.check_password = function(password, username)
 			if not mkyboot.inc.auth.is_configured() then return false, "not configured" end
 			local data, msg = mkyboot.inc.auth.load_auth()
 			if not data then return false, msg end
 			if type(data.admin) ~= "table" or type(data.admin.hash) ~= "string" or type(data.admin.salt) ~= "string" then
 				return false, "invalid auth data"
+			end
+			local stored_user = data.admin.username or "admin"
+			if type(username) == "string" and username ~= stored_user then
+				return false, "OK"
 			end
 			local iters = data.iterations or mkyboot.inc.auth.HASH_ITERATIONS
 			return mkyboot.inc.auth.verify_password(password, data.admin.hash, data.admin.salt, iters), "OK"
@@ -1241,10 +1258,12 @@
 		mkyboot.inc.ratelimit._save = function(data)
 			local json_ok, json = pcall(require, "json")
 			if not json_ok then return end
-			local fd = io.open(mkyboot.inc.ratelimit.FILE, "w")
+			local tmp = mkyboot.inc.ratelimit.FILE .. ".tmp." .. (ngx.worker.pid() or "0")
+			local fd = io.open(tmp, "w")
 			if fd then
 				fd:write(json.encode(data))
 				fd:close()
+				os.rename(tmp, mkyboot.inc.ratelimit.FILE)
 			end
 		end
 
@@ -1463,7 +1482,7 @@
 					ngx.say("ERROR: Passwords do not match")
 					return
 				end
-				local ok, msg = mkyboot.inc.auth.setup_admin(body.password)
+				local ok, msg = mkyboot.inc.auth.setup_admin(body.password, "admin")
 				if ok then
 					mkyboot.inc.log.info("AUTH", "Admin account configured from "..ngx.var.remote_addr)
 					ngx.say("OK")
@@ -1490,13 +1509,20 @@
 					ngx.say("ERROR: No admin configured. Use ?setup=true")
 					return
 				end
-				local ok, msg = mkyboot.inc.auth.check_password(body.pass)
+				local stored_user = mkyboot.inc.auth.get_username()
+				if type(body.login) ~= "string" or body.login ~= stored_user then
+					mkyboot.inc.ratelimit.record_failure(client_ip)
+					mkyboot.inc.log.warn("AUTH", "Failed login attempt (invalid user) from "..client_ip)
+					ngx.say("ERROR: Invalid credentials")
+					return
+				end
+				local ok, msg = mkyboot.inc.auth.check_password(body.pass, body.login)
 				if ok then
-					local sid = mkyboot.inc.session.create(body.login)
+					local sid = mkyboot.inc.session.create(stored_user)
 					if sid then
 						mkyboot.inc.session.set_cookie(sid)
 						mkyboot.inc.ratelimit.clear(client_ip)
-						mkyboot.inc.log.info("AUTH", "Successful login from "..client_ip.." user="..body.login)
+						mkyboot.inc.log.info("AUTH", "Successful login from "..client_ip.." user="..stored_user)
 						ngx.say("OK")
 					else
 						mkyboot.inc.log.error("AUTH", "Session creation failed from "..client_ip)

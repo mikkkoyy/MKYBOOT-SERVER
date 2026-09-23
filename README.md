@@ -13,6 +13,45 @@ Diskless boot Windows/Linux - Free Alternative to CCBoot
 - **Web Interface** - Bootstrap-based admin dashboard
 - **DHCP Integration** - ISC DHCP server config generation
 - **Wake-on-LAN** - Remote power on via etherwake
+- **Secure Authentication** - Password hashing with salted iterative KDF
+- **Server-side Sessions** - File-based session management
+- **Rate Limiting** - Brute-force protection with configurable lockout
+
+## Authentication
+
+### First Setup
+
+On first access, the web interface shows an initial setup page. Configure the administrator password (minimum 8 characters). The username is fixed as `admin`.
+
+### Login
+
+Access `http://<server-ip>:8888` and log in with the configured credentials. The session cookie is HttpOnly and SameSite=Strict.
+
+### Password Policy
+
+- Minimum 8 characters
+- Stored with 250,000-round salted iterative SHA-1 KDF
+- Passwords are never stored in plaintext
+- Salts generated from `/dev/urandom`
+
+### Rate Limiting
+
+- 5 failed login attempts trigger a 5-minute lockout
+- Lockout is per-source-IP
+- Successful login clears failure state
+- Rate limit state persisted to disk
+
+### Session Management
+
+- Server-side file-based sessions in `/srv/mkyboot/cfg/sessions/`
+- 30-minute session timeout
+- Session IDs generated from `/dev/urandom` (256-bit entropy)
+- Old sessions destroyed on login (prevents session fixation)
+- Logout destroys server-side session and expires cookie
+
+### Password Change
+
+Navigate to Settings tab in the admin dashboard. Requires current password verification.
 
 ## Requirements
 
@@ -20,6 +59,8 @@ Diskless boot Windows/Linux - Free Alternative to CCBoot
 - ZFS-capable storage (SSD recommended for cache)
 - Network interface with static IP
 - Physical NICs supporting PXE boot on clients
+- nginx-extras (OpenResty-compatible Lua runtime)
+- lua-json, lua-socket, lua-posix, lfs (LuaFileSystem)
 
 ## Quick Install
 
@@ -190,6 +231,26 @@ Super mode allows committing client changes back to the master image:
 ## License
 
 GNU Affero General Public License v3 (AGPLv3)
+
+## Security
+
+### Password Storage
+
+Passwords are stored using a salted iterative hash (250,000 rounds of SHA-1 with 64-byte random salt from `/dev/urandom`). The authentication record includes algorithm metadata for future KDF upgrades.
+
+### IPC Security
+
+The IPC daemon (`mkybootd`) accepts only `nbd_connect` and `nbd_disconnect` operations via JSON protocol. All arguments are strictly validated.
+
+### Input Validation
+
+All shell command parameters are validated before execution. Path traversal, command injection, and shell metacharacters are rejected.
+
+### Known Limitations
+
+- HTTP-only deployment (HTTPS not yet configured)
+- SHA-1 iterative KDF (not bcrypt/argon2) due to runtime library availability
+- Session files stored as plaintext JSON (not encrypted)
 
 ## Credits
 
