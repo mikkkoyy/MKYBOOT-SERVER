@@ -449,8 +449,8 @@ button:hover{background:#3a5fc8;}
 <p>Initial administrator configuration. Choose a strong password.</p>
 <div>
 <label>Admin Password</label>
-<input type="password" id="new-pass" placeholder="Enter password (min 4 characters)">
-<div class="hint">Password must be at least 4 characters.</div>
+<input type="password" id="new-pass" placeholder="Enter password (min 8 characters)">
+<div class="hint">Password must be at least 8 characters. Use a strong, unique password.</div>
 </div>
 <div>
 <label>Confirm Password</label>
@@ -467,7 +467,7 @@ var p2=document.getElementById('confirm-pass').value;
 var err=document.getElementById('setup-error');
 var ok=document.getElementById('setup-success');
 err.style.display='none';ok.style.display='none';
-if(!p1||p1.length<4){err.textContent='Password must be at least 4 characters';err.style.display='block';return;}
+if(!p1||p1.length<8){err.textContent='Password must be at least 8 characters';err.style.display='block';return;}
 if(p1!==p2){err.textContent='Passwords do not match';err.style.display='block';return;}
 var xhr=new XMLHttpRequest();
 xhr.open('POST','?setup=true',true);
@@ -478,7 +478,7 @@ ok.textContent='Admin configured! Redirecting to login...';ok.style.display='blo
 setTimeout(function(){location.href='?status=true';},2000);
 }else{err.textContent=xhr.responseText.replace('ERROR: ','');err.style.display='block';}
 };
-xhr.send('password='+encodeURIComponent(p1));
+xhr.send('password='+encodeURIComponent(p1)+'&confirm='+encodeURIComponent(p2));
 }
 document.getElementById('confirm-pass').addEventListener('keydown',function(e){if(e.key==='Enter')doSetup();});
 </script>

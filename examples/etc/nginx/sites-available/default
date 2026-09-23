@@ -24,9 +24,8 @@
             default_type 'text/html';
             content_by_lua_file /srv/mkyboot/modules/mkyctl.lua;
 
-            # Отключим кэширование кода для разработки
-            # (это нужно закомментировать, когда выкатим на продакшн)
-            lua_code_cache off;
+            # Enable code cache for production (recommended)
+            # lua_code_cache off;  # Dev mode only - disable for production
           }
 
         # pass PHP scripts to FastCGI server

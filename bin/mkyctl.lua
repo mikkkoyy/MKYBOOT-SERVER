@@ -160,27 +160,51 @@
 			return true
 		end
 	--[[===========================================================================================================================================================================================]]
-	--[[ SECURITY: Password hashing and authentication module                                                                    ]]
+	--[[ SECURITY: Cryptographically secure random bytes                                                                         ]]
+	--[[===========================================================================================================================================================================================]]
+		mkyboot.inc.random = {}
+		mkyboot.inc.random.bytes = function(n)
+			if type(n) ~= "number" or n < 1 then return nil end
+			local fd = io.open("/dev/urandom", "rb")
+			if not fd then return nil end
+			local data = fd:read(n)
+			fd:close()
+			if not data or #data ~= n then return nil end
+			return data
+		end
+		mkyboot.inc.random.hex = function(n)
+			local bytes = mkyboot.inc.random.bytes(n)
+			if not bytes then return nil end
+			local hex = ""
+			for i = 1, #bytes do
+				hex = hex .. string.format("%02x", string.byte(bytes, i))
+			end
+			return hex
+		end
+		mkyboot.inc.random.base64 = function(n)
+			local bytes = mkyboot.inc.random.bytes(n)
+			if not bytes then return nil end
+			return ngx.encode_base64(bytes)
+		end
+	--[[===========================================================================================================================================================================================]]
+	--[[ SECURITY: Password hashing and authentication module (v2 - secure KDF)                                                   ]]
 	--[[===========================================================================================================================================================================================]]
 		mkyboot.inc.auth = {}
 		mkyboot.inc.auth.file = "/srv/mkyboot/cfg/auth.json"
-		mkyboot.inc.auth.HASH_ITERATIONS = 10000
+		mkyboot.inc.auth.VERSION = 2
+		mkyboot.inc.auth.HASH_ITERATIONS = 250000
+		mkyboot.inc.auth.SALT_BYTES = 64
+		mkyboot.inc.auth.MIN_PASSWORD_LENGTH = 8
 
 		mkyboot.inc.auth.generate_salt = function()
-			local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-			local salt = ""
-			math.randomseed(ngx.now() * 1000000 + ngx.worker.pid() + os.time())
-			for i = 1, 32 do
-				local r = math.random(1, #chars)
-				salt = salt .. chars:sub(r, r)
-			end
-			return salt
+			return mkyboot.inc.random.hex(mkyboot.inc.auth.SALT_BYTES)
 		end
 
-		mkyboot.inc.auth.hash_password = function(password, salt)
+		mkyboot.inc.auth.hash_password = function(password, salt, iterations)
 			if type(password) ~= "string" or type(salt) ~= "string" then return nil end
+			local iters = iterations or mkyboot.inc.auth.HASH_ITERATIONS
 			local hash = salt .. ":" .. password
-			for i = 1, mkyboot.inc.auth.HASH_ITERATIONS do
+			for i = 1, iters do
 				local h = ngx.sha1_bin(hash)
 				local hex = ""
 				for j = 1, #h do
@@ -191,9 +215,10 @@
 			return hash
 		end
 
-		mkyboot.inc.auth.verify_password = function(password, stored_hash, stored_salt)
+		mkyboot.inc.auth.verify_password = function(password, stored_hash, stored_salt, stored_iterations)
 			if type(password) ~= "string" or type(stored_hash) ~= "string" or type(stored_salt) ~= "string" then return false end
-			local computed = mkyboot.inc.auth.hash_password(password, stored_salt)
+			local iters = stored_iterations or mkyboot.inc.auth.HASH_ITERATIONS
+			local computed = mkyboot.inc.auth.hash_password(password, stored_salt, iters)
 			if computed == nil then return false end
 			if #computed ~= #stored_hash then return false end
 			local result = 0
@@ -203,43 +228,104 @@
 			return result == 0
 		end
 
-		mkyboot.inc.auth.is_configured = function()
+		mkyboot.inc.auth.load_auth = function()
+			local json_ok, json = pcall(require, "json")
+			if not json_ok then return nil, "json unavailable" end
 			local fd = io.open(mkyboot.inc.auth.file, "r")
-			if fd then
-				fd:close()
-				return true
-			end
-			return false
+			if not fd then return nil, "no auth file" end
+			local content = fd:read("*a")
+			fd:close()
+			local ok, data = pcall(json.decode, content)
+			if not ok or type(data) ~= "table" then return nil, "invalid auth file" end
+			return data, "OK"
 		end
 
-		mkyboot.inc.auth.setup_admin = function(password)
-			if type(password) ~= "string" or #password < 4 then return false, "password too short" end
-			local salt = mkyboot.inc.auth.generate_salt()
-			local hash = mkyboot.inc.auth.hash_password(password, salt)
-			if hash == nil then return false, "hash failed" end
-			local auth_data = { admin = { hash = hash, salt = salt, created = os.date("%Y-%m-%d %H:%M:%S") } }
+		mkyboot.inc.auth.save_auth = function(data)
 			local json_ok, json = pcall(require, "json")
 			if not json_ok then return false, "json unavailable" end
-			local fd = io.open(mkyboot.inc.auth.file, "w")
-			if not fd then return false, "cannot write auth file" end
-			fd:write(json.encode(auth_data))
+			local tmp = mkyboot.inc.auth.file .. ".tmp." .. (mkyboot.inc.random.hex(8) or tostring(os.time()))
+			local fd = io.open(tmp, "w")
+			if not fd then return false, "cannot write temp file" end
+			fd:write(json.encode(data))
 			fd:close()
-			mkyboot.inc.log.info("AUTH", "Admin password configured")
+			local ok, err = os.rename(tmp, mkyboot.inc.auth.file)
+			if not ok then os.remove(tmp); return false, "atomic write failed" end
+			return true, "OK"
+		end
+
+		mkyboot.inc.auth.is_configured = function()
+			local data, msg = mkyboot.inc.auth.load_auth()
+			return data ~= nil and data.admin ~= nil
+		end
+
+		mkyboot.inc.auth.setup_admin = function(password, username)
+			if type(password) ~= "string" or #password < mkyboot.inc.auth.MIN_PASSWORD_LENGTH then
+				return false, "password must be at least " .. mkyboot.inc.auth.MIN_PASSWORD_LENGTH .. " characters"
+			end
+			if mkyboot.inc.auth.is_configured() then
+				return false, "already configured"
+			end
+			local user = username or "admin"
+			local salt = mkyboot.inc.auth.generate_salt()
+			if not salt then return false, "failed to generate salt" end
+			local hash = mkyboot.inc.auth.hash_password(password, salt)
+			if hash == nil then return false, "hash failed" end
+			local auth_data = {
+				version = mkyboot.inc.auth.VERSION,
+				algorithm = "iter-sha1",
+				iterations = mkyboot.inc.auth.HASH_ITERATIONS,
+				salt_bytes = mkyboot.inc.auth.SALT_BYTES,
+				admin = {
+					hash = hash,
+					salt = salt,
+					created = os.date("!%Y-%m-%dT%H:%M:%SZ")
+				}
+			}
+			local ok, msg = mkyboot.inc.auth.save_auth(auth_data)
+			if not ok then return false, msg end
+			mkyboot.inc.log.info("AUTH", "Admin account '" .. user .. "' configured")
 			return true, "OK"
 		end
 
 		mkyboot.inc.auth.check_password = function(password)
 			if not mkyboot.inc.auth.is_configured() then return false, "not configured" end
-			local json_ok, json = pcall(require, "json")
-			if not json_ok then return false, "json unavailable" end
-			local fd = io.open(mkyboot.inc.auth.file, "r")
-			if not fd then return false, "cannot read auth file" end
-			local content = fd:read("*a")
-			fd:close()
-			local ok, data = pcall(json.decode, content)
-			if not ok or type(data) ~= "table" then return false, "invalid auth file" end
-			if type(data.admin) ~= "table" then return false, "invalid auth data" end
-			return mkyboot.inc.auth.verify_password(password, data.admin.hash, data.admin.salt), "OK"
+			local data, msg = mkyboot.inc.auth.load_auth()
+			if not data then return false, msg end
+			if type(data.admin) ~= "table" or type(data.admin.hash) ~= "string" or type(data.admin.salt) ~= "string" then
+				return false, "invalid auth data"
+			end
+			local iters = data.iterations or mkyboot.inc.auth.HASH_ITERATIONS
+			return mkyboot.inc.auth.verify_password(password, data.admin.hash, data.admin.salt, iters), "OK"
+		end
+
+		mkyboot.inc.auth.change_password = function(current_password, new_password)
+			if type(current_password) ~= "string" or type(new_password) ~= "string" then
+				return false, "invalid parameters"
+			end
+			if #new_password < mkyboot.inc.auth.MIN_PASSWORD_LENGTH then
+				return false, "new password must be at least " .. mkyboot.inc.auth.MIN_PASSWORD_LENGTH .. " characters"
+			end
+			if not mkyboot.inc.auth.is_configured() then
+				return false, "not configured"
+			end
+			local data, msg = mkyboot.inc.auth.load_auth()
+			if not data then return false, msg end
+			local iters = data.iterations or mkyboot.inc.auth.HASH_ITERATIONS
+			if not mkyboot.inc.auth.verify_password(current_password, data.admin.hash, data.admin.salt, iters) then
+				mkyboot.inc.log.warn("AUTH", "Password change rejected: incorrect current password")
+				return false, "incorrect current password"
+			end
+			local new_salt = mkyboot.inc.auth.generate_salt()
+			if not new_salt then return false, "failed to generate salt" end
+			local new_hash = mkyboot.inc.auth.hash_password(new_password, new_salt)
+			if not new_hash then return false, "hash failed" end
+			data.admin.hash = new_hash
+			data.admin.salt = new_salt
+			data.admin.updated = os.date("!%Y-%m-%dT%H:%M:%SZ")
+			local ok, msg2 = mkyboot.inc.auth.save_auth(data)
+			if not ok then return false, msg2 end
+			mkyboot.inc.log.info("AUTH", "Password changed successfully")
+			return true, "OK"
 		end
 	--[[===========================================================================================================================================================================================]]
 	--[[ TARGET COMMANDS sets opt1,opt2,opt3  ]]
@@ -980,19 +1066,15 @@
 
 		end;		
 	--[[===========================================================================================================================================================================================]]
-	--[[ CSRF TOKEN FUNCTIONS                                                                                                     ]]
+	--[[ CSRF TOKEN FUNCTIONS (v2 - secure randomness)                                                                            ]]
 	--[[===========================================================================================================================================================================================]]
 		mkyboot.inc.csrf = {}
 		mkyboot.inc.csrf._tokens = {}
+		mkyboot.inc.csrf.TTL = 1800
 		mkyboot.inc.csrf.generate = function()
-			local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-			local token = ""
-			math.randomseed(ngx.now() * 1000 + ngx.worker.pid())
-			for i = 1, 32 do
-				local r = math.random(1, #chars)
-				token = token .. chars:sub(r, r)
-			end
-			mkyboot.inc.csrf._tokens[token] = ngx.now() + 1800
+			local token = mkyboot.inc.random.base64(32)
+			if not token then return nil end
+			mkyboot.inc.csrf._tokens[token] = ngx.now() + mkyboot.inc.csrf.TTL
 			return token
 		end
 		mkyboot.inc.csrf.validate = function(token)
@@ -1005,12 +1087,222 @@
 			end
 			return true
 		end
+		mkyboot.inc.csrf.destroy = function(token)
+			if token then mkyboot.inc.csrf._tokens[token] = nil end
+		end
 		mkyboot.inc.csrf.clean = function()
 			local now = ngx.now()
 			for k, v in pairs(mkyboot.inc.csrf._tokens) do
 				if now > v then mkyboot.inc.csrf._tokens[k] = nil end
 			end
 		end
+	--[[===========================================================================================================================================================================================]]
+	--[[ SERVER-SIDE SESSION MANAGEMENT (v2)                                                                                      ]]
+	--[[===========================================================================================================================================================================================]]
+		mkyboot.inc.session = {}
+		mkyboot.inc.session.dir = "/srv/mkyboot/cfg/sessions"
+		mkyboot.inc.session.TTL = 1800
+		mkyboot.inc.session.COOKIE_NAME = "mkyboot_session"
+		mkyboot.inc.session._data = {}
+
+		mkyboot.inc.session.init = function()
+			local fd = io.open(mkyboot.inc.session.dir, "r")
+			if not fd then
+				lfs.mkdir(mkyboot.inc.session.dir)
+			else
+				fd:close()
+			end
+		end
+
+		mkyboot.inc.session.generate_id = function()
+			return mkyboot.inc.random.base64(32)
+		end
+
+		mkyboot.inc.session.create = function(username)
+			mkyboot.inc.session.destroy_all()
+			local sid = mkyboot.inc.session.generate_id()
+			if not sid then return nil end
+			local session_data = {
+				sid = sid,
+				username = username or "admin",
+				created = ngx.now(),
+				expires = ngx.now() + mkyboot.inc.session.TTL,
+				ip = ngx.var.remote_addr or ""
+			}
+			mkyboot.inc.session._data[sid] = session_data
+			local json_ok, json = pcall(require, "json")
+			if json_ok then
+				local path = mkyboot.inc.session.dir .. "/" .. sid .. ".json"
+				local fd = io.open(path, "w")
+				if fd then
+					fd:write(json.encode(session_data))
+					fd:close()
+				end
+			end
+			return sid
+		end
+
+		mkyboot.inc.session.read = function(sid)
+			if type(sid) ~= "string" or sid == "" then return nil end
+			if mkyboot.inc.session._data[sid] then
+				local s = mkyboot.inc.session._data[sid]
+				if ngx.now() > s.expires then
+					mkyboot.inc.session.destroy(sid)
+					return nil
+				end
+				return s
+			end
+			local path = mkyboot.inc.session.dir .. "/" .. sid .. ".json"
+			local fd = io.open(path, "r")
+			if not fd then return nil end
+			local content = fd:read("*a")
+			fd:close()
+			local json_ok, json = pcall(require, "json")
+			if not json_ok then return nil end
+			local ok, data = pcall(json.decode, content)
+			if not ok or type(data) ~= "table" then return nil end
+			if ngx.now() > (data.expires or 0) then
+				mkyboot.inc.session.destroy(sid)
+				return nil
+			end
+			mkyboot.inc.session._data[sid] = data
+			return data
+		end
+
+		mkyboot.inc.session.destroy = function(sid)
+			if type(sid) ~= "string" then return end
+			mkyboot.inc.session._data[sid] = nil
+			local path = mkyboot.inc.session.dir .. "/" .. sid .. ".json"
+			os.remove(path)
+		end
+
+		mkyboot.inc.session.destroy_all = function()
+			mkyboot.inc.session._data = {}
+			local iter, dir_obj = lfs.dir(mkyboot.inc.session.dir)
+			if iter then
+				for fname in iter, dir_obj do
+					if fname:match("%.json$") then
+						os.remove(mkyboot.inc.session.dir .. "/" .. fname)
+					end
+				end
+			end
+		end
+
+		mkyboot.inc.session.rotate = function(old_sid)
+			local old = mkyboot.inc.session.read(old_sid)
+			if old then
+				mkyboot.inc.session.destroy(old_sid)
+			end
+			return mkyboot.inc.session.create(old and old.username or "admin")
+		end
+
+		mkyboot.inc.session.get_cookie = function()
+			local cookie = ngx.var.http_cookie or ""
+			return cookie:match(mkyboot.inc.session.COOKIE_NAME .. "=([^;]+)")
+		end
+
+		mkyboot.inc.session.set_cookie = function(sid, max_age)
+			local age = max_age or mkyboot.inc.session.TTL
+			ngx.header["Set-Cookie"] = mkyboot.inc.session.COOKIE_NAME .. "=" .. sid .. "; Path=/; HttpOnly; SameSite=Strict; Max-Age=" .. age
+		end
+
+		mkyboot.inc.session.clear_cookie = function()
+			ngx.header["Set-Cookie"] = mkyboot.inc.session.COOKIE_NAME .. "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+		end
+
+		mkyboot.inc.session.validate = function()
+			local sid = mkyboot.inc.session.get_cookie()
+			if not sid then return nil end
+			local session = mkyboot.inc.session.read(sid)
+			if not session then return nil end
+			return session
+		end
+	--[[===========================================================================================================================================================================================]]
+	--[[ LOGIN RATE LIMITING (v2)                                                                                                  ]]
+	--[[===========================================================================================================================================================================================]]
+		mkyboot.inc.ratelimit = {}
+		mkyboot.inc.ratelimit._attempts = {}
+		mkyboot.inc.ratelimit.MAX_ATTEMPTS = 5
+		mkyboot.inc.ratelimit.LOCKOUT_SECONDS = 300
+		mkyboot.inc.ratelimit.FILE = "/srv/mkyboot/cfg/ratelimit.json"
+
+		mkyboot.inc.ratelimit._load = function()
+			local fd = io.open(mkyboot.inc.ratelimit.FILE, "r")
+			if not fd then return {} end
+			local content = fd:read("*a")
+			fd:close()
+			local json_ok, json = pcall(require, "json")
+			if not json_ok then return {} end
+			local ok, data = pcall(json.decode, content)
+			if not ok or type(data) ~= "table" then return {} end
+			return data
+		end
+
+		mkyboot.inc.ratelimit._save = function(data)
+			local json_ok, json = pcall(require, "json")
+			if not json_ok then return end
+			local fd = io.open(mkyboot.inc.ratelimit.FILE, "w")
+			if fd then
+				fd:write(json.encode(data))
+				fd:close()
+			end
+		end
+
+		mkyboot.inc.ratelimit.is_locked = function(ip)
+			if type(ip) ~= "string" or ip == "" then return false end
+			local now = ngx.now()
+			local data = mkyboot.inc.ratelimit._load()
+			local entry = data[ip]
+			if not entry then return false end
+			if entry.locked_until and now < entry.locked_until then
+				return true
+			end
+			if entry.locked_until and now >= entry.locked_until then
+				data[ip] = nil
+				mkyboot.inc.ratelimit._save(data)
+			end
+			return false
+		end
+
+		mkyboot.inc.ratelimit.record_failure = function(ip)
+			if type(ip) ~= "string" or ip == "" then return end
+			local now = ngx.now()
+			local data = mkyboot.inc.ratelimit._load()
+			local entry = data[ip] or { count = 0, first_at = now }
+			entry.count = entry.count + 1
+			entry.last_at = now
+			if entry.count >= mkyboot.inc.ratelimit.MAX_ATTEMPTS then
+				entry.locked_until = now + mkyboot.inc.ratelimit.LOCKOUT_SECONDS
+				mkyboot.inc.log.warn("SECURITY", "Rate limit triggered for " .. ip .. " (" .. entry.count .. " failures)")
+			end
+			data[ip] = entry
+			mkyboot.inc.ratelimit._save(data)
+		end
+
+		mkyboot.inc.ratelimit.clear = function(ip)
+			if type(ip) ~= "string" or ip == "" then return end
+			local data = mkyboot.inc.ratelimit._load()
+			data[ip] = nil
+			mkyboot.inc.ratelimit._save(data)
+		end
+
+		mkyboot.inc.ratelimit.cleanup = function()
+			local now = ngx.now()
+			local data = mkyboot.inc.ratelimit._load()
+			local changed = false
+			for ip, entry in pairs(data) do
+				if entry.locked_until and now >= entry.locked_until then
+					data[ip] = nil
+					changed = true
+				elseif entry.last_at and (now - entry.last_at) > 86400 then
+					data[ip] = nil
+					changed = true
+				end
+			end
+			if changed then mkyboot.inc.ratelimit._save(data) end
+		end
+
+		mkyboot.inc.session.init()
 	--[[===========================================================================================================================================================================================]]
 	--[[ JSON API ENDPOINTS                                                                                                        ]]
 	--[[===========================================================================================================================================================================================]]
@@ -1163,12 +1455,17 @@
 					return
 				end
 				local body = mkyboot.inc.parse_post(ngx.req.get_body_data())
-				if body == nil or body.password == nil or #body.password < 4 then
-					ngx.say("ERROR: Password must be at least 4 characters")
+				if body == nil or body.password == nil or #body.password < mkyboot.inc.auth.MIN_PASSWORD_LENGTH then
+					ngx.say("ERROR: Password must be at least " .. mkyboot.inc.auth.MIN_PASSWORD_LENGTH .. " characters")
+					return
+				end
+				if body.confirm ~= body.password then
+					ngx.say("ERROR: Passwords do not match")
 					return
 				end
 				local ok, msg = mkyboot.inc.auth.setup_admin(body.password)
 				if ok then
+					mkyboot.inc.log.info("AUTH", "Admin account configured from "..ngx.var.remote_addr)
 					ngx.say("OK")
 				else
 					ngx.say("ERROR: " .. tostring(msg))
@@ -1177,9 +1474,15 @@
 
 			--[[ LOGIN HANDLER ]]--
 			elseif ngx.var.arg_login == "true" and ngx.req.get_method() == "POST" then
+				local client_ip = ngx.var.remote_addr or "unknown"
+				if mkyboot.inc.ratelimit.is_locked(client_ip) then
+					mkyboot.inc.log.warn("AUTH", "Login blocked by rate limit from "..client_ip)
+					ngx.say("ERROR: Too many failed attempts. Try again later.")
+					return
+				end
 				local body = mkyboot.inc.parse_post(ngx.req.get_body_data())
 				if body == nil or body.login == nil or body.pass == nil then
-					mkyboot.inc.log.warn("AUTH", "Login attempt with missing credentials from "..ngx.var.remote_addr)
+					mkyboot.inc.log.warn("AUTH", "Login attempt with missing credentials from "..client_ip)
 					ngx.say("ERROR: Invalid request")
 					return
 				end
@@ -1187,32 +1490,73 @@
 					ngx.say("ERROR: No admin configured. Use ?setup=true")
 					return
 				end
-				if body.login ~= "admin" then
-					mkyboot.inc.log.warn("AUTH", "Login attempt with invalid user '"..tostring(body.login).."' from "..ngx.var.remote_addr)
-					ngx.say("ERROR: Invalid credentials")
-					return
-				end
 				local ok, msg = mkyboot.inc.auth.check_password(body.pass)
 				if ok then
-					local token = mkyboot.inc.csrf.generate()
-					ngx.header["Set-Cookie"] = "mkyboot_token=" .. token .. "; Path=/; HttpOnly; SameSite=Strict"
-					mkyboot.inc.log.info("AUTH", "Successful login from "..ngx.var.remote_addr)
-					ngx.say("OK")
+					local sid = mkyboot.inc.session.create(body.login)
+					if sid then
+						mkyboot.inc.session.set_cookie(sid)
+						mkyboot.inc.ratelimit.clear(client_ip)
+						mkyboot.inc.log.info("AUTH", "Successful login from "..client_ip.." user="..body.login)
+						ngx.say("OK")
+					else
+						mkyboot.inc.log.error("AUTH", "Session creation failed from "..client_ip)
+						ngx.say("ERROR: Session error")
+					end
 				else
-					mkyboot.inc.log.warn("AUTH", "Failed login attempt from "..ngx.var.remote_addr)
+					mkyboot.inc.ratelimit.record_failure(client_ip)
+					mkyboot.inc.log.warn("AUTH", "Failed login attempt from "..client_ip)
 					ngx.say("ERROR: Invalid credentials")
 				end
 				return
 
 			--[[ LOGOUT HANDLER ]]--
 			elseif ngx.var.arg_logout == "true" then
-				ngx.header["Set-Cookie"] = "mkyboot_token=; Path=/; HttpOnly; Max-Age=0"
+				local sid = mkyboot.inc.session.get_cookie()
+				if sid then mkyboot.inc.session.destroy(sid) end
+				mkyboot.inc.session.clear_cookie()
+				mkyboot.inc.log.info("AUTH", "Logout from "..(ngx.var.remote_addr or "unknown"))
 				ngx.say("OK")
+				return
+
+			--[[ PASSWORD CHANGE HANDLER ]]--
+			elseif ngx.var.arg_changepw == "true" and ngx.req.get_method() == "POST" then
+				local session = mkyboot.inc.session.validate()
+				if not session then
+					ngx.say("ERROR: Not authenticated")
+					return
+				end
+				local body = mkyboot.inc.parse_post(ngx.req.get_body_data())
+				if body == nil or body.current_password == nil or body.new_password == nil or body.confirm_password == nil then
+					ngx.say("ERROR: All fields required")
+					return
+				end
+				if body.new_password ~= body.confirm_password then
+					ngx.say("ERROR: New passwords do not match")
+					return
+				end
+				local ok, msg = mkyboot.inc.auth.change_password(body.current_password, body.new_password)
+				if ok then
+					local old_sid = mkyboot.inc.session.get_cookie()
+					local new_sid = mkyboot.inc.session.create(session.username)
+					if new_sid then
+						mkyboot.inc.session.destroy(old_sid)
+						mkyboot.inc.session.set_cookie(new_sid)
+					end
+					mkyboot.inc.log.info("AUTH", "Password changed by "..session.username.." from "..(ngx.var.remote_addr or "unknown"))
+					ngx.say("OK")
+				else
+					ngx.say("ERROR: " .. tostring(msg))
+				end
 				return
 
 
 			    elseif ngx.req.get_body_data() then
 			    		local file,temp,l_v,l_k
+			    			--[[ AUTH: Session check for all state-changing operations ]]--
+			    			if not mkyboot.inc.session.validate() then
+			    				ngx.say("ERROR: Not authenticated")
+			    				return
+			    			end
 			    			local origin = ngx.var.http_origin or ngx.var.http_referer or ""
 			    			local server_host = mkyboot.cfg.server.ipv4 or "127.0.0.1"
 			    			if origin ~= "" and not origin:find(server_host, 1, true) and origin ~= "http://127.0.0.1:8888" and origin ~= "http://localhost:8888" then
@@ -1389,19 +1733,44 @@
 				   								
 				   				end;
 			   elseif ngx.var.arg_api == "status" then
+			   		if not mkyboot.inc.session.validate() then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Not authenticated"}')
+			   			return
+			   		end
 			   		ngx.header.content_type = 'application/json'
 			   		ngx.say(json.encode(mkyboot.inc.api.get_server_status()))
 			   elseif ngx.var.arg_api == "clients" then
+			   		if not mkyboot.inc.session.validate() then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Not authenticated"}')
+			   			return
+			   		end
 			   		ngx.header.content_type = 'application/json'
 			   		ngx.say(json.encode(mkyboot.inc.api.list_clients()))
 			   elseif ngx.var.arg_api == "client" and ngx.var.arg_id ~= nil then
+			   		if not mkyboot.inc.session.validate() then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Not authenticated"}')
+			   			return
+			   		end
 			   		ngx.header.content_type = 'application/json'
 			   		local c = mkyboot.inc.api.get_client(ngx.var.arg_id)
 			   		if c then ngx.say(json.encode(c)) else ngx.say("{}") end
 			   elseif ngx.var.arg_api == "images" then
+			   		if not mkyboot.inc.session.validate() then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Not authenticated"}')
+			   			return
+			   		end
 			   		ngx.header.content_type = 'application/json'
 			   		ngx.say(json.encode(mkyboot.inc.api.list_images()))
 			   elseif ngx.var.arg_api == "logs" then
+			   		if not mkyboot.inc.session.validate() then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Not authenticated"}')
+			   			return
+			   		end
 			   		ngx.header.content_type = 'application/json'
 			   		local lines = {}
 			   		local fd = io.open(mkyboot.inc.log.file, "r")
@@ -1422,9 +1791,8 @@
 						ngx.say(mkyboot.cfg.web.pages.html.setup)
 						return
 					end
-					local cookie = ngx.var.http_cookie or ""
-					local token = cookie:match("mkyboot_token=([^;]+)")
-					if not token or not mkyboot.inc.csrf.validate(token) then
+					local session = mkyboot.inc.session.validate()
+					if not session then
 						ngx.say(mkyboot.cfg.web.pages.html.login)
 						return
 					end
@@ -2271,11 +2639,10 @@
 			<input type="hidden" id="csrf_token" value="]]..csrf_token..[[">
 			<script>var CSRF_TOKEN = "]]..csrf_token..[[";</script>
 			<div class="header">
-				<a href="#default" class="logo"><b style="color: red; box-shadow: 4px 0 10px rgba(0,0,0,0.5);">NS</b>Boot
-				<div class="header-right">												    
+				<a href="#default" class="logo"><b style="color: red; box-shadow: 4px 0 10px rgba(0,0,0,0.5);">MK</b>YBOOT
+				<div class="header-right">												 
 			 		<a href="#Support">Support</a>
-			 		<a href="#License">License</a>
-			 		<a class="active" href="#Logout">Logout</a>
+			 		<a href="#" onclick="doLogout()">Logout</a>
 		 		</div>
 			</div>
 
@@ -2344,7 +2711,13 @@ Workstations
 </svg>
   Shutdown
   </button> 
-  <button class="tablinks" onclick="openCity(event, 'Logout')">
+  <button class="tablinks" onclick="openCity(event, 'Settings')">
+  <svg width="3em" height="1.5em" viewBox="0 0 16 16" class="bi bi-gear-fill" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"/>
+</svg>
+  Settings
+  </button>
+  <button class="tablinks" onclick="doLogout()">
   <svg width="3em" height="1.5em" viewBox="0 0 16 16" class="bi bi-door-open-fill" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
   <path fill-rule="evenodd" d="M1.5 15a.5.5 0 0 0 0 1h13a.5.5 0 0 0 0-1H13V2.5A1.5 1.5 0 0 0 11.5 1H11V.5a.5.5 0 0 0-.57-.495l-7 1A.5.5 0 0 0 3 1.5V15H1.5zM11 2v13h1V2.5a.5.5 0 0 0-.5-.5H11zm-2.5 8c-.276 0-.5-.448-.5-1s.224-1 .5-1 .5.448.5 1-.224 1-.5 1z"/>
 </svg>
@@ -2613,6 +2986,60 @@ Workstations
   	};
   	xhr.send();
   })();
+  </script>
+</div>
+
+<div id="Settings" class="tabcontent">
+  <div class="toptab"><b><h3>Account Settings</h3></b></div>
+  <div style="padding:20px;max-width:400px;">
+  	<h5>Change Password</h5>
+  	<div style="margin-bottom:12px;">
+  		<label style="font-weight:600;">Current Password</label>
+  		<input type="password" id="current-pw" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;">
+  	</div>
+  	<div style="margin-bottom:12px;">
+  		<label style="font-weight:600;">New Password</label>
+  		<input type="password" id="new-pw" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;">
+  		<div style="color:#888;font-size:12px;margin-top:4px;">Minimum 8 characters.</div>
+  	</div>
+  	<div style="margin-bottom:12px;">
+  		<label style="font-weight:600;">Confirm New Password</label>
+  		<input type="password" id="confirm-pw" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;">
+  	</div>
+  	<div id="pw-error" style="color:#dc3545;display:none;margin:8px 0;"></div>
+  	<div id="pw-success" style="color:#28a745;display:none;margin:8px 0;"></div>
+  	<button onclick="doChangePassword()" style="padding:8px 20px;background:#4e73df;color:#fff;border:none;border-radius:4px;cursor:pointer;">Change Password</button>
+  </div>
+  <script>
+  function doChangePassword(){
+  	var cp=document.getElementById('current-pw').value;
+  	var np=document.getElementById('new-pw').value;
+  	var cf=document.getElementById('confirm-pw').value;
+  	var err=document.getElementById('pw-error');
+  	var ok=document.getElementById('pw-success');
+  	err.style.display='none';ok.style.display='none';
+  	if(!cp||!np||!cf){err.textContent='All fields are required';err.style.display='block';return;}
+  	if(np.length<8){err.textContent='New password must be at least 8 characters';err.style.display='block';return;}
+  	if(np!==cf){err.textContent='New passwords do not match';err.style.display='block';return;}
+  	var xhr=new XMLHttpRequest();
+  	xhr.open('POST','?changepw=true',true);
+  	xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+  	xhr.onload=function(){
+  		if(xhr.responseText==='OK'){
+  			ok.textContent='Password changed successfully';ok.style.display='block';
+  			document.getElementById('current-pw').value='';
+  			document.getElementById('new-pw').value='';
+  			document.getElementById('confirm-pw').value='';
+  		}else{err.textContent=xhr.responseText.replace('ERROR: ','');err.style.display='block';}
+  	};
+  	xhr.send('current_password='+encodeURIComponent(cp)+'&new_password='+encodeURIComponent(np)+'&confirm_password='+encodeURIComponent(cf));
+  }
+  function doLogout(){
+  	var xhr=new XMLHttpRequest();
+  	xhr.open('POST','?logout=true',true);
+  	xhr.onload=function(){location.href='?status=true';};
+  	xhr.send();
+  }
   </script>
 </div>
 

@@ -24,6 +24,8 @@ echo ""
 echo "[2/7] Creating directory structure..."
 mkdir -p /srv/mkyboot/modules
 mkdir -p /srv/mkyboot/cfg
+mkdir -p /srv/mkyboot/cfg/sessions
+chmod 700 /srv/mkyboot/cfg/sessions
 mkdir -p /srv/mkyboot/images/boot
 mkdir -p /srv/mkyboot/images/boot/snap
 mkdir -p /srv/mkyboot/images/iso
