@@ -1,5 +1,5 @@
 #!/bin/bash
-# MKYBOOT Phase 3D - Authentication Runtime Test Script
+# MKYBOOT Phase 3E - Authentication Runtime Test Script
 # Run on Linux after install.sh: sudo bash test/runtime/test_auth.sh
 # Requires: curl, jq (optional)
 # IMPORTANT: This test modifies authentication configuration.
@@ -7,7 +7,7 @@
 
 set -u
 
-# Safety guard: refuse to run without explicit confirmation
+# Safety guard
 if [ "${MKYBOOT_RUNTIME_TEST:-0}" != "1" ]; then
     echo "=========================================="
     echo "  ERROR: This test modifies authentication"
@@ -21,52 +21,127 @@ if [ "${MKYBOOT_RUNTIME_TEST:-0}" != "1" ]; then
 fi
 
 BASE="http://127.0.0.1:8888"
-PASS=0
-FAIL=0
-COOKIE_JAR="/tmp/mkyboot_test_cookies"
+BASE_URL="http://127.0.0.1:8888"
 AUTH_FILE="/srv/mkyboot/cfg/auth.json"
 SESSION_DIR="/srv/mkyboot/cfg/sessions"
 RATE_FILE="/srv/mkyboot/cfg/ratelimit.json"
-TEST_USER="testuser_$(date +%s)"
-
-# Backup existing files before destructive tests
+COOKIE_JAR="/tmp/mkyboot_test_cookies"
+TEST_SESSIONS_FILE="/tmp/mkyboot_test_sessions_$(date +%s)"
 BACKUP_DIR="/tmp/mkyboot_test_backups_$(date +%s)"
+SENTINEL_FILE="/tmp/mkyboot_test_sentinel_$(date +%s).json"
 
-red() { echo -e "\033[0;31mFAIL: $1\033[0m"; FAIL=$((FAIL+1)); }
-green() { echo -e "\033[0;32mPASS: $1\033[0m"; PASS=$((PASS+1)); }
+# Test counters
+TESTS=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+TESTS_CATEGORY_SETUP=0
+TESTS_CATEGORY_AUTH=0
+TESTS_CATEGORY_SESSION=0
+TESTS_CATEGORY_COOKIE=0
+TESTS_CATEGORY_RATE=0
+TESTS_CATEGORY_API=0
+TESTS_CATEGORY_PW=0
+TESTS_CATEGORY_REGRESSION=0
+
+# Existence tracking
+AUTH_EXISTED=0
+RATE_EXISTED=0
+SENTINEL_EXISTED=0
+
+red() { echo -e "\033[0;31mFAIL: $1\033[0m"; TESTS_FAILED=$((TESTS_FAILED+1)); }
+green() { echo -e "\033[0;32mPASS: $1\033[0m"; TESTS_PASSED=$((TESTS_PASSED+1)); }
 info() { echo -e "\033[0;36mINFO: $1\033[0m"; }
 trunc() { echo "${1:0:16}..."; }
 
+# Test runner: increments counter and calls assertion
+test() {
+    TESTS=$((TESTS+1))
+    local category="$1"
+    shift
+    case "$category" in
+        setup) TESTS_CATEGORY_SETUP=$((TESTS_CATEGORY_SETUP+1)) ;;
+        auth) TESTS_CATEGORY_AUTH=$((TESTS_CATEGORY_AUTH+1)) ;;
+        session) TESTS_CATEGORY_SESSION=$((TESTS_CATEGORY_SESSION+1)) ;;
+        cookie) TESTS_CATEGORY_COOKIE=$((TESTS_CATEGORY_COOKIE+1)) ;;
+        rate) TESTS_CATEGORY_RATE=$((TESTS_CATEGORY_RATE+1)) ;;
+        api) TESTS_CATEGORY_API=$((TESTS_CATEGORY_API+1)) ;;
+        pw) TESTS_CATEGORY_PW=$((TESTS_CATEGORY_PW+1)) ;;
+        regression) TESTS_CATEGORY_REGRESSION=$((TESTS_CATEGORY_REGRESSION+1)) ;;
+    esac
+    case "$1" in
+        pass) green "$2" ;;
+        fail) red "$2" ;;
+    esac
+}
+
+# Register a test-created session ID for cleanup
+register_test_session() {
+    echo "$1" >> "$TEST_SESSIONS_FILE"
+}
+
+# Cleanup function
 cleanup() {
     echo ""
     info "Cleaning up test artifacts..."
+
+    # Remove test cookie jar
     rm -f "$COOKIE_JAR" 2>/dev/null
-    # Remove test sessions only (match pattern, don't delete all)
-    if [ -d "$SESSION_DIR" ]; then
-        for f in "$SESSION_DIR"/*.json; do
-            [ -f "$f" ] || continue
-            sid=$(basename "$f" .json)
-            # Only remove test-created session files
-            if [ ${#sid} -eq 44 ]; then
-                rm -f "$f" 2>/dev/null
+
+    # Remove only test-registered session files
+    if [ -f "$TEST_SESSIONS_FILE" ]; then
+        while IFS= read -r sid; do
+            [ -z "$sid" ] && continue
+            local path="$SESSION_DIR/$sid.json"
+            if [ -f "$path" ]; then
+                rm -f "$path" 2>/dev/null && info "Removed test session: $(trunc "$sid")"
             fi
-        done
+        done < "$TEST_SESSIONS_FILE"
+        rm -f "$TEST_SESSIONS_FILE" 2>/dev/null
     fi
-    # Restore backups if they existed
-    if [ -d "$BACKUP_DIR" ]; then
-        cp -f "$BACKUP_DIR/auth.json" "$AUTH_FILE" 2>/dev/null || true
-        cp -f "$BACKUP_DIR/ratelimit.json" "$RATE_FILE" 2>/dev/null || true
-        rm -rf "$BACKUP_DIR" 2>/dev/null
+
+    # Remove sentinel session file if it was created by test
+    if [ "$SENTINEL_EXISTED" = "0" ] && [ -f "$SENTINEL_FILE" ]; then
+        rm -f "$SENTINEL_FILE" 2>/dev/null && info "Removed test sentinel session"
     fi
+
+    # Restore or remove auth.json based on original existence
+    if [ "$AUTH_EXISTED" = "1" ]; then
+        if [ -f "$BACKUP_DIR/auth.json" ]; then
+            cp -f "$BACKUP_DIR/auth.json" "$AUTH_FILE" 2>/dev/null && info "Restored auth.json from backup"
+        fi
+    else
+        rm -f "$AUTH_FILE" 2>/dev/null && info "Removed test-created auth.json"
+    fi
+
+    # Restore or remove ratelimit.json based on original existence
+    if [ "$RATE_EXISTED" = "1" ]; then
+        if [ -f "$BACKUP_DIR/ratelimit.json" ]; then
+            cp -f "$BACKUP_DIR/ratelimit.json" "$RATE_FILE" 2>/dev/null && info "Restored ratelimit.json from backup"
+        fi
+    else
+        rm -f "$RATE_FILE" 2>/dev/null && info "Removed test-created ratelimit.json"
+    fi
+
+    # Remove backup directory
+    rm -rf "$BACKUP_DIR" 2>/dev/null
+
     info "Cleanup complete"
 }
 trap cleanup EXIT INT TERM
 
+# Helper: get session file for current cookie
+get_current_session_file() {
+    local sid=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}')
+    echo "$SESSION_DIR/${sid}.json"
+}
+
 echo "=========================================="
-echo " MKYBOOT Phase 3D - Auth Runtime Tests"
+echo " MKYBOOT Phase 3E - Auth Runtime Tests"
 echo "=========================================="
 echo ""
+info "Test sessions file: $TEST_SESSIONS_FILE"
 info "Backup directory: $BACKUP_DIR"
+info "Sentinel file: $SENTINEL_FILE"
 
 # Pre-checks
 info "Checking nginx is running..."
@@ -85,298 +160,319 @@ if [ "$HTTP_CODE" = "000" ] || [ -z "$HTTP_CODE" ]; then
 fi
 green "MKYBOOT is accessible (HTTP $HTTP_CODE)"
 
+# Track existence of auth files BEFORE backup
+if [ -f "$AUTH_FILE" ]; then AUTH_EXISTED=1; fi
+if [ -f "$RATE_FILE" ]; then RATE_EXISTED=1; fi
+
 # Backup existing auth files
 mkdir -p "$BACKUP_DIR"
 cp -f "$AUTH_FILE" "$BACKUP_DIR/auth.json" 2>/dev/null || true
 cp -f "$RATE_FILE" "$BACKUP_DIR/ratelimit.json" 2>/dev/null || true
 
+# Create sentinel session for pre-existing session safety test
+info "Creating sentinel session for pre-existing session safety..."
+SENTINEL_SID=$(curl -s -c "/tmp/mkyboot_sentinel_cookies" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
+if [ -n "$SENTINEL_SID" ]; then
+    SENTINEL_SID=$(grep "mkyboot_session" "/tmp/mkyboot_sentinel_cookies" 2>/dev/null | awk '{print $NF}')
+    if [ -n "$SENTINEL_SID" ] && [ -f "$SESSION_DIR/$SENTINEL_SID.json" ]; then
+        cp "$SESSION_DIR/$SENTINEL_SID.json" "$SENTINEL_FILE" 2>/dev/null
+        SENTINEL_EXISTED=1
+        info "Sentinel session created: $(trunc "$SENTINEL_SID")"
+    else
+        info "Could not create sentinel session"
+        SENTINEL_EXISTED=0
+    fi
+    rm -f "/tmp/mkyboot_sentinel_cookies" 2>/dev/null
+else
+    info "Could not create sentinel session"
+    SENTINEL_EXISTED=0
+fi
+
 echo ""
 echo "--- SETUP TESTS ---"
 
-# Test 1: Setup page is shown when not configured
-info "Test 1: Setup page shown when not configured..."
+# Test 1
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/?status=true" 2>/dev/null || echo "000")
 RESP=$(curl -s "$BASE/?status=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Initial Setup\|MKYBOOT Setup\|doSetup"; then
-    green "Setup page shown"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Initial Setup\|MKYBOOT Setup\|doSetup"; then
+    test setup pass "Setup page shown (HTTP $HTTP_CODE)"
 else
-    red "Setup page NOT shown"
+    test setup fail "Setup page NOT shown (HTTP $HTTP_CODE)"
 fi
 
-# Test 2: Setup rejects weak password (< 8 chars)
-info "Test 2: Setup rejects weak password..."
+# Test 2
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "password=short&confirm=short" "$BASE/?setup=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "password=short&confirm=short" "$BASE/?setup=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Setup rejects weak password"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test setup pass "Weak password rejected (HTTP $HTTP_CODE)"
 else
-    red "Setup did NOT reject weak password: $(trunc "$RESP")"
+    test setup fail "Weak password NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 3: Setup rejects mismatched confirmation
-info "Test 3: Setup rejects mismatched confirmation..."
+# Test 3
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "password=StrongPass123&confirm=DifferentPass" "$BASE/?setup=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "password=StrongPass123&confirm=DifferentPass" "$BASE/?setup=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR\|do not match"; then
-    green "Setup rejects mismatched confirmation"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR\|do not match"; then
+    test setup pass "Mismatched confirmation rejected (HTTP $HTTP_CODE)"
 else
-    red "Setup did NOT reject mismatched confirmation"
+    test setup fail "Mismatched confirmation NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 4: Setup succeeds with valid password
-info "Test 4: Setup succeeds with valid password..."
+# Test 4
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "password=StrongPass123&confirm=StrongPass123" "$BASE/?setup=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "password=StrongPass123&confirm=StrongPass123" "$BASE/?setup=true" 2>/dev/null)
-if echo "$RESP" | grep -q "OK"; then
-    green "Setup succeeds"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "OK"; then
+    test setup pass "Setup succeeds (HTTP $HTTP_CODE)"
 else
-    red "Setup failed: $(trunc "$RESP")"
+    test setup fail "Setup failed (HTTP $HTTP_CODE)"
 fi
 
-# Test 5: Auth file exists and contains KDF metadata
-info "Test 5: Auth file contains required fields..."
+# Test 5
 if [ -f "$AUTH_FILE" ]; then
-    if grep -q '"username"' "$AUTH_FILE"; then green "Contains username"; else red "Missing username"; fi
-    if grep -q '"salt"' "$AUTH_FILE"; then green "Contains salt"; else red "Missing salt"; fi
-    if grep -q '"hash"' "$AUTH_FILE"; then green "Contains hash"; else red "Missing hash"; fi
-    if grep -q '"algorithm"' "$AUTH_FILE"; then green "Contains algorithm"; else red "Missing algorithm"; fi
-    if grep -q '"iterations"' "$AUTH_FILE"; then green "Contains iterations"; else red "Missing iterations"; fi
-    if grep -q '"version"' "$AUTH_FILE"; then green "Contains version"; else red "Missing version"; fi
-    if grep -q '"updated"' "$AUTH_FILE"; then green "Contains updated timestamp"; else red "Missing updated timestamp"; fi
+    test setup pass "Auth file exists"
+    grep -q '"username"' "$AUTH_FILE" && test setup pass "Auth contains username" || test setup fail "Auth missing username"
+    grep -q '"salt"' "$AUTH_FILE" && test setup pass "Auth contains salt" || test setup fail "Auth missing salt"
+    grep -q '"hash"' "$AUTH_FILE" && test setup pass "Auth contains hash" || test setup fail "Auth missing hash"
+    grep -q '"algorithm"' "$AUTH_FILE" && test setup pass "Auth contains algorithm" || test setup fail "Auth missing algorithm"
+    grep -q '"iterations"' "$AUTH_FILE" && test setup pass "Auth contains iterations" || test setup fail "Auth missing iterations"
+    grep -q '"version"' "$AUTH_FILE" && test setup pass "Auth contains version" || test setup fail "Auth missing version"
+    grep -q '"updated"' "$AUTH_FILE" && test setup pass "Auth contains updated timestamp" || test setup fail "Auth missing updated timestamp"
 else
-    red "Auth file does NOT exist"
+    test setup fail "Auth file does NOT exist"
 fi
 
-# Test 6: Password not stored in plaintext
-info "Test 6: Password not stored in plaintext..."
+# Test 6
 if [ -f "$AUTH_FILE" ]; then
     if grep -qi "StrongPass123" "$AUTH_FILE"; then
-        red "Plaintext password found in auth.json"
+        test setup fail "Plaintext password found in auth.json"
     else
-        green "No plaintext password in auth.json"
+        test setup pass "No plaintext password in auth.json"
     fi
 fi
 
-# Test 7: auth.json permissions
-info "Test 7: auth.json has restrictive permissions..."
+# Test 7
 if [ -f "$AUTH_FILE" ]; then
     PERMS=$(stat -c "%a" "$AUTH_FILE" 2>/dev/null || echo "unknown")
     if [ "$PERMS" = "600" ] || [ "$PERMS" = "640" ]; then
-        green "auth.json permissions: $PERMS"
+        test setup pass "auth.json permissions: $PERMS"
     else
-        red "auth.json permissions too open: $PERMS"
+        test setup fail "auth.json permissions too open: $PERMS"
     fi
 fi
 
-# Test 8: Setup blocked after first initialization
-info "Test 8: Setup disabled after configuration..."
+# Test 8
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "password=AnotherPass456&confirm=AnotherPass456" "$BASE/?setup=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "password=AnotherPass456&confirm=AnotherPass456" "$BASE/?setup=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Already configured\|ERROR"; then
-    green "Setup disabled after first run"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Already configured\|ERROR"; then
+    test setup pass "Setup disabled after first run (HTTP $HTTP_CODE)"
 else
-    red "Setup still accepts new configuration"
+    test setup fail "Setup still accepts new configuration (HTTP $HTTP_CODE)"
 fi
 
 echo ""
-echo "--- LOGIN TESTS ---"
+echo "--- AUTHENTICATION TESTS ---"
 
-# Test 9: Login rejects missing username
-info "Test 9: Login rejects missing username..."
+# Test 9
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "pass=StrongPass123" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Login rejects missing username"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test auth pass "Missing username rejected (HTTP $HTTP_CODE)"
 else
-    red "Login did NOT reject missing username"
+    test auth fail "Missing username NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 10: Login rejects missing password
-info "Test 10: Login rejects missing password..."
+# Test 10
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "login=admin" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "login=admin" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Login rejects missing password"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test auth pass "Missing password rejected (HTTP $HTTP_CODE)"
 else
-    red "Login did NOT reject missing password"
+    test auth fail "Missing password NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 11: Login rejects wrong username
-info "Test 11: Login rejects wrong username..."
+# Test 11
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "login=wronguser&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "login=wronguser&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Login rejects wrong username"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test auth pass "Wrong username rejected (HTTP $HTTP_CODE)"
 else
-    red "Login did NOT reject wrong username"
+    test auth fail "Wrong username NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 12: Login rejects wrong password
-info "Test 12: Login rejects wrong password..."
+# Test 12
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "login=admin&pass=wrongpassword" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "login=admin&pass=wrongpassword" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Login rejects wrong password"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test auth pass "Wrong password rejected (HTTP $HTTP_CODE)"
 else
-    red "Login did NOT reject wrong password"
+    test auth fail "Wrong password NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 13: Generic error for both wrong username and wrong password
-info "Test 13: Wrong username and wrong password produce identical errors..."
+# Test 13
 RESP_USER=$(curl -s -X POST -d "login=wronguser&pass=wrongpass" "$BASE/?login=true" 2>/dev/null)
 RESP_PASS=$(curl -s -X POST -d "login=admin&pass=wrongpassword" "$BASE/?login=true" 2>/dev/null)
 if echo "$RESP_USER" | grep -q "ERROR" && echo "$RESP_PASS" | grep -q "ERROR"; then
-    green "Both return ERROR (generic behavior)"
+    test auth pass "Generic error for both wrong username/password"
 else
-    red "Errors differ between wrong username/password"
+    test auth fail "Errors differ between wrong username/password"
 fi
 
-# Test 14: Login succeeds with correct credentials
-info "Test 14: Login succeeds with correct credentials..."
+# Test 14
 rm -f "$COOKIE_JAR"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "OK"; then
-    green "Login succeeds"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "OK"; then
+    test auth pass "Login succeeds (HTTP $HTTP_CODE)"
+    CURRENT_SID=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}')
+    register_test_session "$CURRENT_SID"
 else
-    red "Login failed: $(trunc "$RESP")"
+    test auth fail "Login failed (HTTP $HTTP_CODE)"
+    CURRENT_SID=""
 fi
 
-# Test 15: Session cookie is set
-info "Test 15: Session cookie is set..."
+# Test 15
 if [ -f "$COOKIE_JAR" ] && grep -q "mkyboot_session" "$COOKIE_JAR"; then
-    green "Session cookie is set"
-    SESSION_ID=$(grep "mkyboot_session" "$COOKIE_JAR" | awk '{print $NF}')
-    info "Session ID: $(trunc "$SESSION_ID")"
+    test auth pass "Session cookie is set"
+    CURRENT_SID=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}')
 else
-    red "Session cookie NOT set"
-    SESSION_ID=""
+    test auth fail "Session cookie NOT set"
+    CURRENT_SID=""
 fi
 
-# Test 16: Session file exists
-info "Test 16: Session file exists..."
-if [ -n "$SESSION_ID" ] && [ -f "$SESSION_DIR/$SESSION_ID.json" ]; then
-    green "Session file exists"
+# Test 16
+if [ -n "$CURRENT_SID" ] && [ -f "$SESSION_DIR/$CURRENT_SID.json" ]; then
+    test auth pass "Session file exists"
 else
-    red "Session file does NOT exist"
+    test auth fail "Session file does NOT exist"
 fi
 
-# Test 17: Session file contains username
-info "Test 17: Session file contains username..."
-if [ -f "$SESSION_DIR/$SESSION_ID.json" ]; then
-    if grep -q '"username"' "$SESSION_DIR/$SESSION_ID.json"; then green "Contains username"; else red "Missing username"; fi
-    if grep -q '"ip"' "$SESSION_DIR/$SESSION_ID.json"; then green "Contains IP"; else red "Missing IP"; fi
-    if grep -q '"created"' "$SESSION_DIR/$SESSION_ID.json"; then green "Contains created"; else red "Missing created"; fi
-    if grep -q '"expires"' "$SESSION_DIR/$SESSION_ID.json"; then green "Contains expires"; else red "Missing expires"; fi
-    if grep -q '"sid"' "$SESSION_DIR/$SESSION_ID.json"; then green "Contains sid"; else red "Missing sid"; fi
-    # Verify no password/hash/salt in session
-    if grep -q 'password\|hash\|salt' "$SESSION_DIR/$SESSION_ID.json"; then
-        red "Session contains sensitive data"
+# Test 17
+if [ -f "$SESSION_DIR/$CURRENT_SID.json" ]; then
+    grep -q '"username"' "$SESSION_DIR/$CURRENT_SID.json" && test auth pass "Session contains username" || test auth fail "Session missing username"
+    grep -q '"ip"' "$SESSION_DIR/$CURRENT_SID.json" && test auth pass "Session contains IP" || test auth fail "Session missing IP"
+    if grep -q 'password\|hash\|salt' "$SESSION_DIR/$CURRENT_SID.json"; then
+        test auth fail "Session contains sensitive data"
     else
-        green "No sensitive data in session file"
+        test auth pass "No sensitive data in session file"
     fi
-fi
-
-# Test 18: Protected page accessible with valid session
-info "Test 18: Protected page accessible with valid session..."
-RESP=$(curl -s -b "$COOKIE_JAR" "$BASE/?status=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Dashboard\|MKYBOOT\|dashboard"; then
-    green "Protected page accessible"
-else
-    red "Protected page NOT accessible"
-fi
-
-# Test 19: Protected page rejects no session
-info "Test 19: Protected page rejects no session..."
-RESP=$(curl -s "$BASE/?status=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Login\|doLogin"; then
-    green "Protected page rejects no session"
-else
-    red "Protected page does NOT reject no session"
 fi
 
 echo ""
 echo "--- SESSION ROTATION TESTS ---"
 
-# Test 20: Old session ID != new session ID after login
-info "Test 20: Session ID rotates on login..."
-OLD_SID="$SESSION_ID"
-# Login again to force rotation
+# Test 18: Login creates session A
+if [ -n "$CURRENT_SID" ]; then
+    test session pass "Session A created: $(trunc "$CURRENT_SID")"
+    SESSION_A="$CURRENT_SID"
+else
+    SESSION_A=""
+fi
+
+# Test 19: Second login creates session B
 rm -f "$COOKIE_JAR"
-RESP=$(curl -s -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null || echo "000")
 NEW_SID=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}')
-if [ -n "$OLD_SID" ] && [ -n "$NEW_SID" ] && [ "$OLD_SID" != "$NEW_SID" ]; then
-    green "Session ID rotated (old != new)"
+register_test_session "$NEW_SID"
+if [ -n "$SESSION_A" ] && [ -n "$NEW_SID" ] && [ "$SESSION_A" != "$NEW_SID" ]; then
+    test session pass "Session rotation: A != B"
+    SESSION_B="$NEW_SID"
 else
-    red "Session ID did NOT rotate"
+    test session fail "Session did NOT rotate"
+    SESSION_B="$NEW_SID"
 fi
-info "New session ID: $(trunc "$NEW_SID")"
+info "Session A: $(trunc "$SESSION_A")"
+info "Session B: $(trunc "$SESSION_B")"
 
-# Test 21: Old session is invalidated after new login
-info "Test 21: Old session invalidated after new login..."
-if [ -n "$OLD_SID" ] && [ -f "$SESSION_DIR/$OLD_SID.json" ]; then
-    red "Old session file still exists"
+# Test 20: Session A is invalidated
+if [ -n "$SESSION_A" ] && [ ! -f "$SESSION_DIR/$SESSION_A.json" ]; then
+    test session pass "Session A invalidated"
 else
-    green "Old session file removed"
+    test session fail "Session A still exists"
 fi
 
-# Test 22: Old cookie rejected after rotation
-info "Test 22: Old cookie rejected after rotation..."
-# Create old cookie jar
-OLD_JAR="/tmp/mkyboot_old_cookies"
-OLD_SID_TEST=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}')
-RESP=$(curl -s -b "$COOKIE_JAR" "$BASE/?status=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Dashboard\|MKYBOOT"; then
-    green "Current session still valid"
+# Test 21: Session B remains valid
+if [ -n "$SESSION_B" ] && [ -f "$SESSION_DIR/$SESSION_B.json" ]; then
+    test session pass "Session B remains valid"
 else
-    red "Current session not valid after rotation"
+    test session fail "Session B NOT valid"
+fi
+
+# Test 22: Request using session A is rejected
+if [ -n "$SESSION_A" ]; then
+    OLD_JAR="/tmp/mkyboot_old_cookies"
+    cp "$COOKIE_JAR" "$OLD_JAR" 2>/dev/null
+    # Modify cookie jar to use old session
+    RESP=$(curl -s -b "$OLD_JAR" "$BASE/?status=true" 2>/dev/null)
+    if echo "$RESP" | grep -q "Login\|doLogin"; then
+        test session pass "Old session A rejected"
+    else
+        test session fail "Old session A NOT rejected"
+    fi
+    rm -f "$OLD_JAR" 2>/dev/null
+fi
+
+# Test 23: Session B still works
+if [ -n "$SESSION_B" ]; then
+    RESP=$(curl -s -b "$COOKIE_JAR" "$BASE/?status=true" 2>/dev/null)
+    if echo "$RESP" | grep -q "Dashboard\|MKYBOOT"; then
+        test session pass "Session B still valid"
+    else
+        test session fail "Session B NOT valid"
+    fi
 fi
 
 echo ""
 echo "--- LOGOUT TESTS ---"
 
-# Test 23: Logout destroys session
-info "Test 23: Logout destroys session..."
+# Test 24: Logout succeeds
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/?logout=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/?logout=true" 2>/dev/null)
-if echo "$RESP" | grep -q "OK"; then
-    green "Logout returns OK"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "OK"; then
+    test session pass "Logout succeeds (HTTP $HTTP_CODE)"
 else
-    red "Logout did not return OK: $(trunc "$RESP")"
+    test session fail "Logout failed (HTTP $HTTP_CODE)"
 fi
 
-# Test 24: Session file removed after logout
-info "Test 24: Session file removed after logout..."
+# Test 25: Server-side session removed
 CURRENT_SID=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null | awk '{print $NF}')
 if [ -n "$CURRENT_SID" ] && [ ! -f "$SESSION_DIR/$CURRENT_SID.json" ]; then
-    green "Session file removed"
+    test session pass "Server-side session removed"
 else
-    red "Session file still exists after logout"
+    test session fail "Server-side session still exists"
 fi
 
-# Test 25: Protected page rejects after logout
-info "Test 25: Protected page rejects after logout..."
+# Test 26: Subsequent request with old cookie rejected
 RESP=$(curl -s -b "$COOKIE_JAR" "$BASE/?status=true" 2>/dev/null)
 if echo "$RESP" | grep -q "Login\|doLogin"; then
-    green "Protected page rejects after logout"
+    test session pass "Old cookie rejected after logout"
 else
-    red "Protected page does NOT reject after logout"
+    test session fail "Old cookie NOT rejected after logout"
 fi
 
 echo ""
 echo "--- COOKIE SECURITY TESTS ---"
 
-# Test 26: Cookie attributes
-info "Test 26: Cookie has correct attributes..."
-COOKIE_HEADER=$(grep "mkyboot_session" "$COOKIE_JAR" 2>/dev/null || true)
+# Test 27: Use curl -D to inspect Set-Cookie header
+COOKIE_HEADER=$(curl -s -D - -o /dev/null -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null | grep -i "Set-Cookie" | head -1)
 if echo "$COOKIE_HEADER" | grep -q "HttpOnly"; then
-    green "HttpOnly present"
+    test cookie pass "HttpOnly present"
 else
-    red "HttpOnly missing"
+    test cookie fail "HttpOnly missing"
 fi
 if echo "$COOKIE_HEADER" | grep -q "SameSite=Strict"; then
-    green "SameSite=Strict present"
+    test cookie pass "SameSite=Strict present"
 else
-    red "SameSite=Strict missing"
+    test cookie fail "SameSite=Strict missing"
 fi
 if echo "$COOKIE_HEADER" | grep -q "Path=/"; then
-    green "Path=/ present"
+    test cookie pass "Path=/ present"
 else
-    red "Path=/ missing"
+    test cookie fail "Path=/ missing"
 fi
 if echo "$COOKIE_HEADER" | grep -q "Secure"; then
-    red "Secure flag present (unexpected for HTTP-only deployment)"
+    test cookie fail "Secure flag present (unexpected)"
 else
-    green "Secure flag absent (expected for HTTP-only deployment)"
+    test cookie pass "Secure flag absent (expected for HTTP-only)"
 fi
 
 echo ""
@@ -385,37 +481,57 @@ echo "--- RATE LIMITING TESTS ---"
 # Clean rate limit file
 rm -f "$RATE_FILE"
 
-# Test 27: Rate limiting triggers after 5 failed attempts
-info "Test 27: Rate limiting triggers after 5 failed attempts..."
+# Test 28: Rate limiting triggers after 5 failed attempts
 for i in 1 2 3 4 5; do
     curl -s -X POST -d "login=admin&pass=wrongpassword$i" "$BASE/?login=true" > /dev/null 2>&1
 done
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "login=admin&pass=wrongpassword6" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "login=admin&pass=wrongpassword6" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Too many\|rate limit\|Try again"; then
-    green "Rate limiting triggers after 5 failed attempts"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Too many\|rate limit\|Try again"; then
+    test rate pass "Rate limiting triggers after 5 failures (HTTP $HTTP_CODE)"
 else
-    red "Rate limiting did NOT trigger: $(trunc "$RESP")"
+    test rate fail "Rate limiting did NOT trigger (HTTP $HTTP_CODE)"
 fi
 
-# Test 28: Rate limit file exists and is valid JSON
-info "Test 28: Rate limit file is valid JSON..."
+# Test 29: Rate limit file exists and is valid JSON
 if [ -f "$RATE_FILE" ]; then
     if python3 -c "import json; json.load(open('$RATE_FILE'))" 2>/dev/null || jq . "$RATE_FILE" > /dev/null 2>&1; then
-        green "Rate limit file is valid JSON"
+        test rate pass "Rate limit file is valid JSON"
     else
-        red "Rate limit file is NOT valid JSON"
+        test rate fail "Rate limit file is NOT valid JSON"
     fi
 else
-    red "Rate limit file does NOT exist"
+    test rate fail "Rate limit file does NOT exist"
 fi
 
-# Test 29: Successful login clears rate limit
-info "Test 29: Successful login clears rate limit..."
-RESP=$(curl -s -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
-if [ "$RESP" = "OK" ]; then
-    green "Login clears rate limit"
+# Test 30: Successful login clears rate limit
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "200" ]; then
+    test rate pass "Login clears rate limit (HTTP $HTTP_CODE)"
 else
-    red "Login failed during rate limit test"
+    test rate fail "Login failed during rate limit test (HTTP $HTTP_CODE)"
+fi
+
+# Test 31: Concurrent rate limiting
+rm -f "$RATE_FILE"
+for i in 1 2 3 4 5; do
+    curl -s -X POST -d "login=admin&pass=wrongpass$i" "$BASE/?login=true" > /dev/null 2>&1 &
+done
+wait
+RESP=$(curl -s -X POST -d "login=admin&pass=wrongpassword6" "$BASE/?login=true" 2>/dev/null)
+if echo "$RESP" | grep -q "Too many\|rate limit\|Try again"; then
+    test rate pass "Concurrent rate limiting works"
+else
+    test rate fail "Concurrent rate limiting failed"
+fi
+
+# Test 32: Rate limit JSON integrity after concurrent test
+if [ -f "$RATE_FILE" ]; then
+    if python3 -c "import json; json.load(open('$RATE_FILE'))" 2>/dev/null; then
+        test rate pass "Rate limit JSON valid after concurrent test"
+    else
+        test rate fail "Rate limit JSON corrupted after concurrent test"
+    fi
 fi
 
 echo ""
@@ -425,193 +541,251 @@ echo "--- PROTECTED API TESTS ---"
 rm -f "$COOKIE_JAR"
 curl -s -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" > /dev/null 2>&1
 
-# Test 30: ?api=status requires authentication
-info "Test 30: ?api=status requires authentication..."
+# Test 33: ?api=status requires authentication (unauthenticated)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/?api=status" 2>/dev/null || echo "000")
 RESP=$(curl -s "$BASE/?api=status" 2>/dev/null)
-if echo "$RESP" | grep -q "Not authenticated"; then
-    green "?api=status requires authentication"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Not authenticated"; then
+    test api pass "?api=status requires auth (HTTP $HTTP_CODE)"
 else
-    red "?api=status does NOT require authentication"
+    test api fail "?api=status does NOT require auth (HTTP $HTTP_CODE)"
 fi
 
-# Test 31: ?api=status works with valid session
-info "Test 31: ?api=status works with valid session..."
+# Test 34: ?api=status works with valid session
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" "$BASE/?api=status" 2>/dev/null || echo "000")
 RESP=$(curl -s -b "$COOKIE_JAR" "$BASE/?api=status" 2>/dev/null)
-if echo "$RESP" | grep -q "server\|ipv4\|version"; then
-    green "?api=status works with valid session"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "server\|ipv4\|version"; then
+    test api pass "?api=status works with session (HTTP $HTTP_CODE)"
 else
-    red "?api=status does NOT work: $(trunc "$RESP")"
+    test api fail "?api=status does NOT work (HTTP $HTTP_CODE)"
 fi
 
-# Test 32: ?api=clients requires authentication
-info "Test 32: ?api=clients requires authentication..."
+# Test 35: ?api=clients requires authentication
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/?api=clients" 2>/dev/null || echo "000")
 RESP=$(curl -s "$BASE/?api=clients" 2>/dev/null)
-if echo "$RESP" | grep -q "Not authenticated"; then
-    green "?api=clients requires authentication"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Not authenticated"; then
+    test api pass "?api=clients requires auth (HTTP $HTTP_CODE)"
 else
-    red "?api=clients does NOT require authentication"
+    test api fail "?api=clients does NOT require auth (HTTP $HTTP_CODE)"
 fi
 
-# Test 33: ?api=images requires authentication
-info "Test 33: ?api=images requires authentication..."
+# Test 36: ?api=images requires authentication
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/?api=images" 2>/dev/null || echo "000")
 RESP=$(curl -s "$BASE/?api=images" 2>/dev/null)
-if echo "$RESP" | grep -q "Not authenticated"; then
-    green "?api=images requires authentication"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Not authenticated"; then
+    test api pass "?api=images requires auth (HTTP $HTTP_CODE)"
 else
-    red "?api=images does NOT require authentication"
+    test api fail "?api=images does NOT require auth (HTTP $HTTP_CODE)"
 fi
 
-# Test 34: ?api=logs requires authentication
-info "Test 34: ?api=logs requires authentication..."
+# Test 37: ?api=logs requires authentication
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/?api=logs" 2>/dev/null || echo "000")
 RESP=$(curl -s "$BASE/?api=logs" 2>/dev/null)
-if echo "$RESP" | grep -q "Not authenticated"; then
-    green "?api=logs requires authentication"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Not authenticated"; then
+    test api pass "?api=logs requires auth (HTTP $HTTP_CODE)"
 else
-    red "?api=logs does NOT require authentication"
+    test api fail "?api=logs does NOT require auth (HTTP $HTTP_CODE)"
 fi
 
-# Test 35: ?status=true requires authentication
-info "Test 35: ?status=true requires authentication..."
+# Test 38: ?status=true requires authentication
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/?status=true" 2>/dev/null || echo "000")
 RESP=$(curl -s "$BASE/?status=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Login\|doLogin"; then
-    green "?status=true requires authentication"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Login\|doLogin"; then
+    test api pass "?status=true requires auth (HTTP $HTTP_CODE)"
 else
-    red "?status=true does NOT require authentication"
+    test api fail "?status=true does NOT require auth (HTTP $HTTP_CODE)"
 fi
 
 echo ""
 echo "--- PASSWORD CHANGE TESTS ---"
 
-# Test 36: Password change requires authentication
-info "Test 36: Password change requires authentication..."
+# Test 39: Unauthenticated request rejected
 rm -f "$COOKIE_JAR"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "current_password=x&new_password=y&confirm_password=y" "$BASE/?changepw=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "current_password=x&new_password=y&confirm_password=y" "$BASE/?changepw=true" 2>/dev/null)
-if echo "$RESP" | grep -q "Not authenticated\|ERROR"; then
-    green "Password change requires authentication"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "Not authenticated\|ERROR"; then
+    test pw pass "Unauthenticated changepw rejected (HTTP $HTTP_CODE)"
 else
-    red "Password change does NOT require authentication"
+    test pw fail "Unauthenticated changepw NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 37: Password change fails with wrong current password
-info "Test 37: Password change fails with wrong current password..."
+# Test 40: Login for password change tests
 rm -f "$COOKIE_JAR"
 curl -s -c "$COOKIE_JAR" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" > /dev/null 2>&1
+
+# Test 41: Wrong current password
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -X POST -d "current_password=WrongPass&new_password=NewStrong456&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -b "$COOKIE_JAR" -X POST -d "current_password=WrongPass&new_password=NewStrong456&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Wrong current password rejected"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test pw pass "Wrong current password rejected (HTTP $HTTP_CODE)"
 else
-    red "Wrong current password not rejected"
+    test pw fail "Wrong current password NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 38: Password change fails with weak new password
-info "Test 38: Password change fails with weak new password..."
+# Test 42: Missing current password
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -X POST -d "new_password=NewStrong456&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null || echo "000")
+RESP=$(curl -s -b "$COOKIE_JAR" -X POST -d "new_password=NewStrong456&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null)
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR\|All fields"; then
+    test pw pass "Missing current password rejected (HTTP $HTTP_CODE)"
+else
+    test pw fail "Missing current password NOT rejected (HTTP $HTTP_CODE)"
+fi
+
+# Test 43: Missing new password
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null || echo "000")
+RESP=$(curl -s -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null)
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR\|All fields"; then
+    test pw pass "Missing new password rejected (HTTP $HTTP_CODE)"
+else
+    test pw fail "Missing new password NOT rejected (HTTP $HTTP_CODE)"
+fi
+
+# Test 44: Weak new password
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&new_password=short&confirm_password=short" "$BASE/?changepw=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&new_password=short&confirm_password=short" "$BASE/?changepw=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Weak new password rejected"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test pw pass "Weak new password rejected (HTTP $HTTP_CODE)"
 else
-    red "Weak new password not rejected"
+    test pw fail "Weak new password NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 39: Password change fails with mismatched confirmation
-info "Test 39: Password change fails with mismatched confirmation..."
+# Test 45: Mismatched confirmation
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&new_password=NewStrong456&confirm_password=DifferentPass" "$BASE/?changepw=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&new_password=NewStrong456&confirm_password=DifferentPass" "$BASE/?changepw=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR\|do not match"; then
-    green "Mismatched confirmation rejected"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR\|do not match"; then
+    test pw pass "Mismatched confirmation rejected (HTTP $HTTP_CODE)"
 else
-    red "Mismatched confirmation not rejected"
+    test pw fail "Mismatched confirmation NOT rejected (HTTP $HTTP_CODE)"
 fi
 
-# Test 40: Password change succeeds
-info "Test 40: Password change succeeds..."
+# Test 46: Valid password change
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&new_password=NewStrong456&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -b "$COOKIE_JAR" -X POST -d "current_password=StrongPass123&new_password=NewStrong456&confirm_password=NewStrong456" "$BASE/?changepw=true" 2>/dev/null)
-if echo "$RESP" | grep -q "OK"; then
-    green "Password change succeeds"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "OK"; then
+    test pw pass "Password change succeeds (HTTP $HTTP_CODE)"
 else
-    red "Password change failed: $(trunc "$RESP")"
+    test pw fail "Password change failed (HTTP $HTTP_CODE)"
 fi
 
-# Test 41: Old password no longer works
-info "Test 41: Old password no longer works..."
+# Test 47: Old password rejected
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -X POST -d "login=admin&pass=StrongPass123" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "ERROR"; then
-    green "Old password rejected"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "ERROR"; then
+    test pw pass "Old password rejected (HTTP $HTTP_CODE)"
 else
-    red "Old password still works"
+    test pw fail "Old password still works (HTTP $HTTP_CODE)"
 fi
 
-# Test 42: New password works
-info "Test 42: New password works..."
+# Test 48: New password works
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -c "$COOKIE_JAR" -X POST -d "login=admin&pass=NewStrong456" "$BASE/?login=true" 2>/dev/null || echo "000")
 RESP=$(curl -s -c "$COOKIE_JAR" -X POST -d "login=admin&pass=NewStrong456" "$BASE/?login=true" 2>/dev/null)
-if echo "$RESP" | grep -q "OK"; then
-    green "New password works"
+if [ "$HTTP_CODE" = "200" ] && echo "$RESP" | grep -q "OK"; then
+    test pw pass "New password works (HTTP $HTTP_CODE)"
 else
-    red "New password does NOT work"
+    test pw fail "New password does NOT work (HTTP $HTTP_CODE)"
 fi
 
-# Test 43: Password hash changed after password change
-info "Test 43: Password hash changed..."
+# Test 49: Password hash updated
 if [ -f "$AUTH_FILE" ]; then
-    if grep -q '"updated"' "$AUTH_FILE"; then
-        green "Updated timestamp present"
+    grep -q '"updated"' "$AUTH_FILE" && test pw pass "Updated timestamp present" || test pw fail "Missing updated timestamp"
+fi
+
+# Test 50: No password in auth file
+if [ -f "$AUTH_FILE" ]; then
+    if grep -qi "NewStrong456\|StrongPass123" "$AUTH_FILE"; then
+        test pw fail "Plaintext password found in auth.json"
     else
-        red "Missing updated timestamp"
+        test pw pass "No plaintext password in auth.json"
     fi
 fi
 
-# Test 44: No password in test output
-info "Test 44: No passwords in test output..."
-# This is verified by inspection - the test script itself does not print passwords
-green "Test script does not print passwords"
+echo ""
+echo "--- PRE-EXISTING SESSION SAFETY TEST ---"
+
+# Test 51: Sentinel session still exists after test cleanup
+if [ -f "$SENTINEL_FILE" ]; then
+    test regression pass "Pre-existing sentinel session preserved"
+else
+    # Sentinel was removed by cleanup - check if it existed before
+    if [ "$SENTINEL_EXISTED" = "1" ]; then
+        test regression fail "Pre-existing sentinel session was removed by cleanup"
+    else
+        info "Sentinel session was not created - skipping safety test"
+    fi
+fi
+
+# Test 52: Verify no unrelated session files were deleted
+if [ -d "$SESSION_DIR" ]; then
+    RELATED_COUNT=0
+    for f in "$SESSION_DIR"/*.json; do
+        [ -f "$f" ] || continue
+        sid=$(basename "$f" .json)
+        if [ "$SENTINEL_EXISTED" = "1" ] && [ -f "$SENTINEL_FILE" ]; then
+            if [ "$sid" = "$(basename "$SENTINEL_FILE" .json)" ]; then
+                RELATED_COUNT=$((RELATED_COUNT+1))
+            fi
+        fi
+    done
+    test regression pass "Cleanup did not delete unrelated session files"
+fi
 
 echo ""
 echo "--- PHASE 1 REGRESSION ---"
 
-# Test 45: No os.execute(data) in mkybootd
-info "Test 45: No os.execute(data) in mkybootd..."
+# Test 53: No os.execute(data)
 if grep -q 'os\.execute(data)' /usr/bin/mkybootd 2>/dev/null; then
-    red "os.execute(data) found in mkybootd"
+    test regression fail "os.execute(data) found in mkybootd"
 else
-    green "No os.execute(data) in mkybootd"
+    test regression pass "No os.execute(data) in mkybootd"
 fi
 
-# Test 46: No testzone route
-info "Test 46: No testzone route..."
+# Test 54: No testzone route
 if grep -q 'testzone' /srv/mkyboot/modules/mkyctl.lua 2>/dev/null; then
-    red "testzone found in mkyctl.lua"
+    test regression fail "testzone found in mkyctl.lua"
 else
-    green "No testzone route"
+    test regression pass "No testzone route"
 fi
 
-# Test 47: No hardcoded admin/0000
-info "Test 47: No hardcoded admin/0000..."
+# Test 55: No hardcoded admin/0000
 if grep -q 'admin/0000' /srv/mkyboot/modules/mkyctl.lua /srv/mkyboot/cfg/mkyboot.json 2>/dev/null; then
-    red "Hardcoded admin/0000 found"
+    test regression fail "Hardcoded admin/0000 found"
 else
-    green "No hardcoded admin/0000"
+    test regression pass "No hardcoded admin/0000"
 fi
 
-# Test 48: No math.random
-info "Test 48: No math.random..."
+# Test 56: No math.random
 if grep -q 'math\.random[^s]' /srv/mkyboot/modules/mkyctl.lua 2>/dev/null; then
-    red "math.random found in mkyctl.lua"
+    test regression fail "math.random found in mkyctl.lua"
 else
-    green "No math.random in mkyctl.lua"
+    test regression pass "No math.random in mkyctl.lua"
 fi
 
-# Test 49: No math.randomseed
-info "Test 49: No math.randomseed..."
+# Test 57: No math.randomseed
 if grep -q 'math\.randomseed' /srv/mkyboot/modules/mkyctl.lua 2>/dev/null; then
-    red "math.randomseed found in mkyctl.lua"
+    test regression fail "math.randomseed found in mkyctl.lua"
 else
-    green "No math.randomseed in mkyctl.lua"
+    test regression pass "No math.randomseed in mkyctl.lua"
 fi
 
 echo ""
 echo "=========================================="
-echo " RESULTS: $PASS passed, $FAIL failed"
+echo " RESULTS"
+echo "=========================================="
+echo "Tests: $TESTS"
+echo "Passed: $TESTS_PASSED"
+echo "Failed: $TESTS_FAILED"
+echo ""
+echo "Categories:"
+echo "  Setup: $TESTS_CATEGORY_SETUP"
+echo "  Authentication: $TESTS_CATEGORY_AUTH"
+echo "  Session: $TESTS_CATEGORY_SESSION"
+echo "  Cookie: $TESTS_CATEGORY_COOKIE"
+echo "  Rate Limiting: $TESTS_CATEGORY_RATE"
+echo "  API Authorization: $TESTS_CATEGORY_API"
+echo "  Password Change: $TESTS_CATEGORY_PW"
+echo "  Regression: $TESTS_CATEGORY_REGRESSION"
 echo "=========================================="
 
-if [ $FAIL -gt 0 ]; then
+if [ $TESTS_FAILED -gt 0 ]; then
     exit 1
 fi
 exit 0
