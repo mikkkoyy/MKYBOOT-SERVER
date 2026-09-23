@@ -18,7 +18,7 @@ fi
 echo ""
 echo "[1/7] Installing dependencies..."
 apt-get update
-apt-get install -y etherwake shellinabox qemu-utils lua-json lua-socket lua-posix nginx-extras zfsutils-linux tftpd-hpa isc-dhcp-server tgt
+apt-get install -y etherwake shellinabox qemu-utils lua-json lua-socket lua-posix lua-filesystem nginx-extras zfsutils-linux tftpd-hpa isc-dhcp-server tgt
 
 echo ""
 echo "[2/7] Creating directory structure..."

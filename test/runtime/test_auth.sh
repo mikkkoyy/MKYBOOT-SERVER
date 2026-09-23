@@ -351,17 +351,17 @@ fi
 echo ""
 echo "--- PHASE 1 REGRESSION ---"
 
-# Test 28: No os.execute(data) in server.lua
-info "Test: No os.execute(data) in server.lua..."
-if grep -q 'os.execute(data)' bin/server.lua 2>/dev/null; then
-    red "os.execute(data) found in server.lua"
+# Test 28: No os.execute(data) in mkybootd
+info "Test: No os.execute(data) in mkybootd..."
+if grep -q 'os\.execute(data)' /usr/bin/mkybootd 2>/dev/null; then
+    red "os.execute(data) found in mkybootd"
 else
-    green "No os.execute(data) in server.lua"
+    green "No os.execute(data) in mkybootd"
 fi
 
 # Test 29: No testzone route
 info "Test: No testzone route..."
-if grep -q 'testzone' bin/mkyctl.lua 2>/dev/null; then
+if grep -q 'testzone' /srv/mkyboot/modules/mkyctl.lua 2>/dev/null; then
     red "testzone found in mkyctl.lua"
 else
     green "No testzone route"
@@ -369,7 +369,7 @@ fi
 
 # Test 30: No hardcoded admin/0000
 info "Test: No hardcoded admin/0000..."
-if grep -q 'admin/0000' bin/mkyctl.lua src/cfg.lua 2>/dev/null; then
+if grep -q 'admin/0000' /srv/mkyboot/modules/mkyctl.lua /srv/mkyboot/cfg/mkyboot.json 2>/dev/null; then
     red "Hardcoded admin/0000 found"
 else
     green "No hardcoded admin/0000"
