@@ -1125,7 +1125,10 @@
 		mkyboot.inc.session.init = function()
 			local fd = io.open(mkyboot.inc.session.dir, "r")
 			if not fd then
-				lfs.mkdir(mkyboot.inc.session.dir)
+				local ok, err = pcall(lfs.mkdir, mkyboot.inc.session.dir)
+				if not ok then
+					mkyboot.inc.log.error("SESSION", "Failed to create session directory: "..tostring(err))
+				end
 			else
 				fd:close()
 			end
@@ -1150,10 +1153,12 @@
 			local json_ok, json = pcall(require, "json")
 			if json_ok then
 				local path = mkyboot.inc.session.dir .. "/" .. sid .. ".json"
-				local fd = io.open(path, "w")
+				local tmp = path .. ".tmp." .. (ngx.worker.pid() or "0")
+				local fd = io.open(tmp, "w")
 				if fd then
 					fd:write(json.encode(session_data))
 					fd:close()
+					os.rename(tmp, path)
 				end
 			end
 			return sid
