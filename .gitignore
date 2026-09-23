@@ -1,0 +1,29 @@
+# Runtime data
+/srv/writeback/
+/srv/images/
+/srv/tftp/*.iso
+
+# Lock files
+/var/lock/
+
+# Logs
+*.log
+/var/log/messages
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-workspace
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
