@@ -1816,6 +1816,43 @@
 			   			end
 			   		end
 			   		ngx.say(json.encode(lines))
+			   elseif ngx.var.arg_api == "server" and ngx.var.arg_op ~= nil then
+			   		if not mkyboot.inc.session.validate() then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Not authenticated"}')
+			   			return
+			   		end
+			   		local origin = ngx.var.http_origin or ngx.var.http_referer or ""
+			   		local server_host = mkyboot.cfg.server.ipv4 or "127.0.0.1"
+			   		if origin ~= "" and not origin:find(server_host, 1, true) and origin ~= "http://127.0.0.1:8888" and origin ~= "http://localhost:8888" then
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Invalid origin"}')
+			   			return
+			   		end
+			   		if ngx.var.arg_op == "restart" then
+			   			ngx.header.content_type = 'application/json'
+			   			local ok, err = pcall(mkyboot.inc.systemctl, "nginx", "restart")
+			   			if ok and err then
+			   				mkyboot.inc.log.info("ADMIN", "Server restarted by session user")
+			   				ngx.say(json.encode({success=true, action="restart"}))
+			   			else
+			   				mkyboot.inc.log.error("ADMIN", "Server restart failed: "..tostring(err))
+			   				ngx.say(json.encode({success=false, action="restart", error=tostring(err)}))
+			   			end
+			   		elseif ngx.var.arg_op == "stop" then
+			   			ngx.header.content_type = 'application/json'
+			   			local ok, err = pcall(mkyboot.inc.systemctl, "nginx", "stop")
+			   			if ok and err then
+			   				mkyboot.inc.log.info("ADMIN", "Server stopped by session user")
+			   				ngx.say(json.encode({success=true, action="stop"}))
+			   			else
+			   				mkyboot.inc.log.error("ADMIN", "Server stop failed: "..tostring(err))
+			   				ngx.say(json.encode({success=false, action="stop", error=tostring(err)}))
+			   			end
+			   		else
+			   			ngx.header.content_type = 'application/json'
+			   			ngx.say('{"error":"Invalid server operation"}')
+			   		end
 			   elseif ngx.var.arg_status == "true" then
 			   		--[[ CHECK AUTHENTICATION FOR ADMIN PAGES ]]--
 					if not mkyboot.inc.auth.is_configured() then

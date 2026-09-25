@@ -1,0 +1,63 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "../assets/mkyboot_16.png",
+        "../assets/mkyboot_32.png",
+        "../assets/mkyboot_48.png",
+        "../assets/mkyboot_256.png"
+      ]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "",
+          "version": ""
+        },
+        "description": "MKYBOOT Launcher",
+        "minimum-os": "win10",
+        "execution-level": "as invoker",
+        "ui-access": false,
+        "auto-elevate": false,
+        "dpi-awareness": "",
+        "disable-theming": false,
+        "disable-window-filtering": false,
+        "high-resolution-scrolling-aware": false,
+        "ultra-high-resolution-scrolling-aware": false,
+        "long-path-aware": false,
+        "printer-driver-isolation": false,
+        "gdi-scaling": false,
+        "segment-heap": false,
+        "use-common-controls-v6": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "1.0.0.0",
+          "product_version": "1.0.0.0"
+        },
+        "info": {
+          "0409": {
+            "Comments": "Native Windows management launcher for the MKYBOOT Linux diskless boot server",
+            "CompanyName": "MKYBOOT",
+            "FileDescription": "MKYBOOT Launcher",
+            "FileVersion": "1.0.0.0",
+            "InternalName": "mkyboot-launcher",
+            "LegalCopyright": "AGPL v3 - MKYBOOT project",
+            "LegalTrademarks": "",
+            "OriginalFilename": "MKYBOOT Launcher.exe",
+            "PrivateBuild": "",
+            "ProductName": "MKYBOOT Launcher",
+            "ProductVersion": "1.0.0.0",
+            "SpecialBuild": ""
+          }
+        }
+      }
+    }
+  }
+}
