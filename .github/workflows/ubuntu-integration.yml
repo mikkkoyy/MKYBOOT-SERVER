@@ -57,7 +57,7 @@ jobs:
             luac5.4 -p "$file"
             printf 'PASS luac5.4 %s\n' "$file"
           done
-          for file in bin/*.lua src/cfg.lua src/image.lua srv/mkyboot/*.lua test/srv/mkyboot/*.lua; do
+          for file in bin/*.lua src/cfg.lua src/image.lua srv/mkyboot/*.lua test/srv/mkyboot/*.lua test/runtime/*.lua; do
             luajit -b "$file" "$RUNNER_TEMP/mkyboot.ljbc"
             printf 'PASS LuaJIT syntax %s\n' "$file"
           done
@@ -65,14 +65,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for source in bin/mkyctl.lua srv/mkyboot/mkyctl.lua test/srv/mkyboot/mkyctl.lua; do
-            for suite in test_status_cache test_server_control test_auth test_dhcp_export; do
-              lua5.4 "test/runtime/$suite.lua" "$source"
-              printf 'PASS %s on %s\n' "$suite" "$source"
+          for interpreter in lua5.4 luajit; do
+            for source in bin/mkyctl.lua srv/mkyboot/mkyctl.lua test/srv/mkyboot/mkyctl.lua; do
+              for suite in test_status_cache test_server_control test_auth test_dhcp_export; do
+                "$interpreter" "test/runtime/$suite.lua" "$source"
+                printf 'PASS %s %s on %s\n' "$interpreter" "$suite" "$source"
+              done
             done
+            "$interpreter" test/runtime/test_deploy_wiring.lua .
+            "$interpreter" test/runtime/measure_status_perf.lua bin/mkyctl.lua
           done
-          lua5.4 test/runtime/test_deploy_wiring.lua .
-          lua5.4 test/runtime/measure_status_perf.lua bin/mkyctl.lua
       - name: Test module resolution from unrelated working directories
         shell: bash
         run: |
@@ -80,9 +82,11 @@ jobs:
           repo="$GITHUB_WORKSPACE"
           other="$(mktemp -d)"
           trap 'rmdir "$other"' EXIT
-          for dir in / /tmp "$other" "$repo"; do
-            (cd "$dir" && lua5.4 "$repo/test/runtime/test_module_path.lua" "$repo/bin/mkyctl.lua")
-            printf 'PASS module path from %s\n' "$dir"
+          for interpreter in lua5.4 luajit; do
+            for dir in / /tmp "$other" "$repo"; do
+              (cd "$dir" && "$interpreter" "$repo/test/runtime/test_module_path.lua" "$repo/bin/mkyctl.lua")
+              printf 'PASS %s module path from %s\n' "$interpreter" "$dir"
+            done
           done
       - name: Validate static PXE configuration and DHCP syntax only
         shell: bash
