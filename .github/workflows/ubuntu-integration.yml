@@ -104,7 +104,11 @@ jobs:
             sudo install -m 644 examples/etc/dhcp/dhcpd.conf "$config"
           fi
           sudo /usr/sbin/dhcpd -t -cf "$config"
-          printf 'PASS normalized DHCP syntax only; no DHCP server was started\n'
+          printf 'PASS normalized example DHCP syntax only\n'
+          MKYBOOT_CI_DHCP_CONFIG="$RUNNER_TEMP/mkyboot-generated.conf" lua5.4 test/runtime/test_dhcp_export.lua bin/mkyctl.lua
+          sudo install -m 644 "$RUNNER_TEMP/mkyboot-generated.conf" "$config"
+          sudo /usr/sbin/dhcpd -t -cf "$config"
+          printf 'PASS generated DHCP syntax only; no DHCP server was started\n'
       - name: Check Go format, vet and cross-build Windows launcher
         if: always()
         shell: bash

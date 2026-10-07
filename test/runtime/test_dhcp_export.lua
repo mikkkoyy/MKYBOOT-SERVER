@@ -70,7 +70,7 @@ mkyboot.cfg.dhcp = {
     global = { authoritative = "" },
     opt = { ["domain-name"] = "mkyboot.local" },
     sub = { { sub = "192.168.0.0", mask = "255.255.255.0", ranges = { "192.168.0.10 192.168.0.149" } } },
-    ipxe = "option ipxe.no-pxedhcp 1;",
+    ipxe = "option space ipxe;\noption ipxe.no-pxedhcp code 176 = unsigned integer 8;\noption ipxe.no-pxedhcp 1;",
   },
 }
 mkyboot.cfg.wks = {
@@ -157,6 +157,12 @@ ok(multi:find('filename "ipxe32.efi"', 1, true) == nil,
    "neither host offers the missing 32-bit image")
 
 io.open = realOpen
+local exportPath = os.getenv("MKYBOOT_CI_DHCP_CONFIG")
+if exportPath and exportPath ~= "" then
+  local exportFile = assert(realOpen(exportPath, "wb"))
+  assert(exportFile:write(without))
+  assert(exportFile:close())
+end
 print(string.format("\n%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
 os.exit(0)
