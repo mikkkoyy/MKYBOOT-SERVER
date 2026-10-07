@@ -269,7 +269,20 @@
 			if type(user) ~= "string" or #user < 1 or #user > 64 then
 				return false, "invalid username"
 			end
-			if user:match("[%;%|%&%`%$%!%%%]") then
+			-- Reject usernames containing shell/format metacharacters.
+			-- Written as an explicit loop: the equivalent character class
+			-- ("[%;%|%&%`%$%!%%%]") is a malformed pattern on Lua 5.4,
+			-- which turned this check into a runtime error. The set is
+			-- identical, so this is not a relaxation.
+			local l_bad = false
+			for i = 1, #user do
+			local c = user:sub(i, i)
+			if c == ";" or c == "|" or c == "&" or c == "`" or
+			   c == "$" or c == "!" or c == "%" or c == "]" then
+			l_bad = true break
+			end
+			end
+			if l_bad then
 				return false, "invalid username"
 			end
 			local salt = mkyboot.inc.auth.generate_salt()
