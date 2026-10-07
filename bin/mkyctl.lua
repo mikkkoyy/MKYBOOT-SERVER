@@ -1,6 +1,20 @@
 ﻿---#!/usr/bin/lua
 
-package.path = package.path .. ";src/?.lua"
+-- Resolve sibling modules (image.lua) relative to THIS FILE, not to the
+-- current working directory. nginx runs with its own prefix as CWD, so a
+-- relative "src/?.lua" resolves to e.g. /src/image.lua and never loads.
+do
+	local l_dir = nil
+	if debug and debug.getinfo then
+		local l_src = debug.getinfo(1, "S").source
+		if type(l_src) == "string" and l_src:sub(1, 1) == "@" then
+			l_dir = l_src:sub(2):match("^(.*[/\\])")
+		end
+	end
+	-- Fallback to the documented install location (install.sh).
+	if not l_dir then l_dir = "/srv/mkyboot/modules/" end
+	package.path = l_dir .. "?.lua;" .. package.path
+end
 
 
 --tgtadm --lld iscsi --op new --mode target --tid 1 -T 											#CREATE TARGET

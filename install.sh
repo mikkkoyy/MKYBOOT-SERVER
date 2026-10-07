@@ -38,10 +38,17 @@ mkdir -p /var/log
 echo ""
 echo "[3/7] Installing server files..."
 cp -f bin/mkyctl.lua /srv/mkyboot/modules/mkyctl.lua
+# image.lua is required by mkyctl.lua (require("image")). Without it the image
+# lifecycle (img.new/child/del/commit/used) raises "module not found".
+cp -f src/image.lua /srv/mkyboot/modules/image.lua
 cp -f bin/client.lua /srv/mkyboot/client.lua
 cp -f bin/server.lua /usr/bin/mkybootd
 chmod +x /usr/bin/mkybootd
 chmod +x /srv/mkyboot/client.lua
+# mkyctl.lua line 59 runs dofile("/srv/mkyboot/cfg/cfg.lua") at module load.
+# Without this file nginx returns 500 on every request and the admin UI, DHCP
+# generation and the iPXE/PXE endpoints are all dead.
+cp -f src/cfg.lua /srv/mkyboot/cfg/cfg.lua
 
 echo ""
 echo "[4/7] Installing TFTP boot files..."

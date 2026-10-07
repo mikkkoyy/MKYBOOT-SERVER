@@ -99,6 +99,15 @@ local function load_module(opts)
   return mkyboot.inc.status
 end
 
+-- fileExists must CLOSE the handle. On Windows an open handle blocks both
+-- os.remove and os.rename, which would silently break the tests that rewrite
+-- the snapshot afterwards.
+local function fileExists(path)
+  local fd = io.open(path, "rb")
+  if fd then fd:close() return true end
+  return false
+end
+
 local function rm(f) os.remove(f) end
 
 -- ================================================================= tests --
@@ -345,8 +354,8 @@ for _, suffix in ipairs({ "", ".tmpcafe1234" }) do rm(S.file .. suffix) end
 S = load_module({ tgtadm = "", lsof = "" })
 mkyboot.cfg.dhcp = { port = 67 }; mkyboot.cfg.tftp = { port = 69 }; mkyboot.cfg.iscsi = { port = 3260 }
 S.refresh()
-ok(io.open(S.file, "rb") ~= nil, "snapshot file exists after refresh")
-ok(io.open(S.file .. ".tmpcafe1234", "rb") == nil, "no temp file left behind")
+ok(fileExists(S.file), "snapshot file exists after refresh")
+ok(not fileExists(S.file .. ".tmpcafe1234"), "no temp file left behind")
 
 section("snapshot file is the shared source of truth (worker-safe)")
 -- Two "workers" each with an empty memo read the same file.
