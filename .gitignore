@@ -27,3 +27,7 @@ desktop.ini
 *.tmp
 *.bak
 *.orig
+
+# Launcher build output
+/launcher/dist/
+
