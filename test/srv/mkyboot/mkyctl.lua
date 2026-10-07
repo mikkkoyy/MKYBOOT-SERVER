@@ -803,7 +803,17 @@
 											file:write("		filename \"",v.fileboot,".kpxe\";\n"); 
 											file:write("	}\n");
 											file:write("	elsif substring (option vendor-class-identifier, 15, 5) = \"00006\" {\n");
-											file:write("		filename \"",v.fileboot,"32.efi\";\n"); 
+											-- Only offer the 32-bit UEFI image when it is actually installed.
+											-- ExportDHCP() used to emit "<fileboot>32.efi" unconditionally, so a 32-bit
+											-- UEFI client was handed a filename that does not exist in TFTP and could
+											-- not boot. Build it from src/ipxe (make bin-i386-efi/ipxe.efi) and copy it
+											-- into the TFTP root to enable that path; otherwise fall back to 64-bit.
+											if mkyboot.inc.isFile((mkyboot.cfg.tftp and mkyboot.cfg.tftp.workdir or "/srv/tftp").."/"..v.fileboot.."32.efi") then
+												file:write("		filename \"",v.fileboot,"32.efi\";\n");
+											else
+												file:write("		# ",v.fileboot,"32.efi not installed; using the 64-bit UEFI image instead.\n");
+												file:write("		filename \"",v.fileboot,".efi\";\n");
+											end
 											file:write("	}\n");
 											file:write("	else {\n");
 											file:write("		filename \"",v.fileboot,".efi\";\n"); 
