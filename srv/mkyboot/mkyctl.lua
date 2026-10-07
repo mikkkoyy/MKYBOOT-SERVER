@@ -239,7 +239,7 @@ end
 			if #computed ~= #stored_hash then return false end
 			local result = 0
 			for i = 1, #computed do
-				result = bit.bor(result, string.byte(computed, i) ~ string.byte(stored_hash, i))
+				result = bit.bor(result, bit.bxor(string.byte(computed, i), string.byte(stored_hash, i)))
 			end
 			return result == 0
 		end

@@ -323,21 +323,29 @@ package.preload["json"] = function() return jsonImpl end
 local env = makeEnv()
 jsonImpl = env.json
 package.loaded["json"] = env.json
--- verify_password compares hashes with bit.bor (LuaJIT, as OpenResty ships).
--- This interpreter has no bit library, so provide the one operation used.
--- The comparison must stay constant-work: bor of the XOR differences is zero
--- only when the strings are identical, which is what makes it timing-safe.
-env.bit = { bor = function(x, y)
-  x, y = x or 0, y or 0
-  local r, bitval = 0, 1
-  for _ = 1, 32 do
-    local ox, oy = x % 2, y % 2
-    x, y = (x - ox) / 2, (y - oy) / 2
-    if ox + oy > 0 then r = r + bitval end
-    bitval = bitval * 2
-  end
-  return r
-end }
+env.bit = {
+  bor = function(x, y)
+    x, y = x or 0, y or 0
+    local r, bitval = 0, 1
+    for _ = 1, 32 do
+      local ox, oy = x % 2, y % 2
+      x, y = math.floor(x / 2), math.floor(y / 2)
+      if ox + oy > 0 then r = r + bitval end
+      bitval = bitval * 2
+    end
+    return r
+  end,
+  bxor = function(x, y)
+    local r, bitval = 0, 1
+    for _ = 1, 8 do
+      local ox, oy = x % 2, y % 2
+      x, y = math.floor(x / 2), math.floor(y / 2)
+      if ox ~= oy then r = r + bitval end
+      bitval = bitval * 2
+    end
+    return r
+  end,
+}
 assert(load(validators, "v", "t", env))()
 -- Session storage uses LuaFileSystem for directory listing. The harness
 -- redirects all session files to memory, so a minimal stub is sufficient.
