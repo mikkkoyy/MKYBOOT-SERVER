@@ -94,8 +94,7 @@ func (a *App) trayCallback(lParam uintptr) {
 // server is online and no operation is already running.
 func (a *App) trayShowMenu() {
 	res, _, busy, _ := a.stateSnapshot()
-	online := res.State == StateOnline
-	canControl := controlAPISupported && !busy && online
+	canControl := controlAPISupported && !busy && canControlServer(res.State)
 
 	hMenu, _, _ := procCreatePopupMenu.Call()
 	add := func(text string, id int, enabled bool) {

@@ -34,11 +34,22 @@ type ServerState int
 const (
 	// StateConnecting means a check is in flight.
 	StateConnecting ServerState = iota
-	// StateOnline means the server answered with a MKYBOOT-compatible response.
+	// StateStarting means a control operation was requested and the launcher
+	// is waiting for the service to become ready. It is deliberately not
+	// ONLINE and not OFFLINE: neither would be truthful yet.
+	StateStarting
+	// StateOnline means the server answered with a MKYBOOT-compatible response
+	// and all reported diskless services are running.
 	StateOnline
+	// StateDegraded means the server answered correctly but at least one
+	// diskless service (DHCP/TFTP/iSCSI) is not running. The web UI answers, so
+	// this is NOT offline, but clients cannot PXE boot reliably.
+	StateDegraded
 	// StateOffline means the server could not be reached (refused/DNS).
 	StateOffline
-	// StateTimeout means the bounded request deadline elapsed.
+	// StateTimeout means the bounded response deadline elapsed after the TCP
+	// connection had already been established - the server is reachable but did
+	// not answer within the budget.
 	StateTimeout
 	// StateUnauthorized means HTTP 401/403 was returned.
 	StateUnauthorized
@@ -47,6 +58,9 @@ const (
 	// StateMalformed means the server answered but the payload was not valid
 	// MKYBOOT JSON.
 	StateMalformed
+	// StateStopping means a stop operation was requested and the launcher is
+	// waiting for the service to actually go away.
+	StateStopping
 )
 
 // ControlOp is a supported server control operation.
@@ -82,13 +96,46 @@ var (
 )
 
 const (
-	statusTimeout   = 5 * time.Second
-	controlTimeout  = 8 * time.Second
-	loginTimeout    = 8 * time.Second
-	maxResponseBody = 1 << 20 // 1 MiB hard bound on any response body
+	// dialTimeout bounds the TCP connect phase only. It stays short so a
+	// closed port produces a fast, definitive OFFLINE verdict instead of a
+	// long hang.
+	dialTimeout = 3 * time.Second
+	// statusTimeout bounds the whole status request. It has to be generous:
+	// the real ?api=status handler in bin/mkyctl.lua answers only after
+	//   - 3 blocking lsof calls (services.dhcp/tftp/iscsi), and
+	//   - one blocking shell pipeline running tgtadm+grep per configured
+	//     workstation, from mkyboot:checkstatpc (bin/mkyctl.lua:918),
+	// and that blocking spawn stalls the whole nginx worker. A single shared
+	// 5s budget made a healthy but loaded server report Timeout, which in turn
+	// disabled every recovery action - the launcher dead-ended itself.
+	statusTimeout = 20 * time.Second
+	// controlTimeout and loginTimeout get the same reasoning: both are handled
+	// by the same blocking Lua worker.
+	controlTimeout = 20 * time.Second
+	loginTimeout   = 20 * time.Second
+	// statusRetryAttempts/statusRetryBackoff add bounded retries so a server
+	// that is still coming up is not reported offline on the first probe.
+	statusRetryAttempts = 2
+	statusRetryBackoff  = 500 * time.Millisecond
+	maxResponseBody     = 1 << 20 // 1 MiB hard bound on any response body
 	// sessionCookieName is the fixed MKYBOOT session cookie name.
 	sessionCookieName = "mkyboot_session"
 )
+
+// newTransport builds an HTTP transport with an explicit, short connect budget
+// and a separate response-header budget. Proxy is disabled on purpose: LAN
+// server traffic must never be routed through a system proxy, and the launcher
+// must work with no internet access.
+func newTransport(responseHeaderTimeout time.Duration) *http.Transport {
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	return &http.Transport{
+		Proxy:                 nil,
+		DialContext:           dialer.DialContext,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+		ExpectContinueTimeout: time.Second,
+		MaxIdleConnsPerHost:   2,
+	}
+}
 
 // MKYBootServer is the HTTP communication client for one MKYBOOT server.
 // It is safe for concurrent use.
@@ -120,15 +167,14 @@ func NewMKYBootServer(raw string) (*MKYBootServer, error) {
 		baseURL: norm,
 		jarMu:   newJarChan(),
 		statusClient: &http.Client{
-			Timeout: statusTimeout,
-			Jar:     jar,
-			// Never route LAN server traffic through a system proxy.
-			Transport: &http.Transport{Proxy: nil},
+			Timeout:   statusTimeout,
+			Jar:       jar,
+			Transport: newTransport(dialTimeout + statusTimeout),
 		},
 		actionClient: &http.Client{
 			Timeout:   controlTimeout,
 			Jar:       jar,
-			Transport: &http.Transport{Proxy: nil},
+			Transport: newTransport(dialTimeout + controlTimeout),
 		},
 	}
 	return s, nil
@@ -207,20 +253,38 @@ func (s ServerState) String() string {
 	switch s {
 	case StateConnecting:
 		return "Connecting"
+	case StateStarting:
+		return "Starting"
 	case StateOnline:
 		return "Online"
+	case StateDegraded:
+		return "Degraded"
 	case StateOffline:
 		return "Offline"
 	case StateTimeout:
-		return "Timeout"
+		return "Slow Response"
 	case StateUnauthorized:
 		return "Unauthorized"
 	case StateServerError:
 		return "Server Error"
 	case StateMalformed:
 		return "Malformed Response"
+	case StateStopping:
+		return "Stopping"
 	default:
 		return "Unknown"
+	}
+}
+
+// Reachable reports whether the state means the server answered (or is at
+// least reachable). Degraded is reachable: the web UI serves fine, some
+// diskless services are down. Starting and Stopping are in-flight states.
+func (s ServerState) Reachable() bool {
+	switch s {
+	case StateOnline, StateDegraded, StateUnauthorized, StateStarting, StateStopping:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -233,6 +297,9 @@ type ServerStatus struct {
 	ClientsOnline   int
 	ClientsOffline  int
 	ServicesRunning bool
+	// DownServices names the diskless services the server reported as not
+	// running. Non-empty means Degraded, not Offline.
+	DownServices []string
 }
 
 // CheckResult is the outcome of one status/health check.
@@ -289,27 +356,59 @@ func (s *MKYBootServer) Login(password string) error {
 
 // classifyTransportError maps a low-level HTTP error to state+detail without
 // leaking URL credentials (URLs are already credential-free by validation).
+//
+// The dial phase and the response phase are deliberately treated differently.
+// The transport uses a short connect budget and a longer response budget, so a
+// dial-phase failure means "nothing is listening here" while any later failure
+// means "the TCP connection was established but the server did not answer in
+// time". That distinction is what keeps a busy server from being reported as
+// offline and from disabling the recovery actions.
 func classifyTransportError(err error) (ServerState, string) {
+	// Dial-phase failure: the request never left the machine.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		msg := opErr.Error()
+		switch {
+		// "connection refused" is the POSIX wording; Windows reports
+		// "No connection could be made because the target machine actively
+		// refused it". Matching only the former left Windows users with the
+		// useless generic message.
+		case strings.Contains(msg, "refused"):
+			return StateOffline, "connection refused"
+		case strings.Contains(msg, "no such host"):
+			return StateOffline, "host not found"
+		case strings.Contains(msg, "network is unreachable"),
+			strings.Contains(msg, "no route to host"),
+			strings.Contains(msg, "unreachable"),
+			strings.Contains(msg, "unreachable network"):
+			return StateOffline, "network unreachable"
+		case opErr.Timeout():
+			return StateOffline, "connect timed out"
+		}
+		return StateOffline, "cannot reach server"
+	}
+
+	// Post-dial failure: the server accepted the connection.
+	if errors.Is(err, context.Canceled) {
+		return StateOffline, "check cancelled"
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return StateTimeout, "request timed out"
+		return StateTimeout, "server reachable but slow to respond"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return StateTimeout, "server reachable but slow to respond"
 	}
 	errStr := err.Error()
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return StateTimeout, "request timed out"
-	case strings.Contains(errStr, "connection refused"):
-		return StateOffline, "connection refused"
 	case strings.Contains(errStr, "no such host"):
 		return StateOffline, "host not found"
-	case strings.Contains(errStr, "DNS"),
-		strings.Contains(errStr, "network is unreachable"),
-		strings.Contains(errStr, "server gave HTTP response"),
-		strings.Contains(errStr, "EOF"),
+	case strings.Contains(errStr, "refused"):
+		return StateOffline, "connection refused"
+	case strings.Contains(errStr, "EOF"),
 		strings.Contains(errStr, "reset"),
-		strings.Contains(errStr, "refused"),
 		strings.Contains(errStr, "forced close"):
-		return StateOffline, "connection failed"
+		return StateOffline, "connection closed by server"
 	}
 	return StateOffline, "cannot reach server"
 }
@@ -401,18 +500,33 @@ func (s *MKYBootServer) Control(op ControlOp) (ControlAck, error) {
 }
 
 // CheckStatus performs one bounded health/status request against
-// GET /?api=status. Transport problems are classified into the state taxonomy
-// instead of being propagated as panics.
+// GET /?api=status using a fresh background context.
 func (s *MKYBootServer) CheckStatus() CheckResult {
+	return s.CheckStatusContext(context.Background())
+}
+
+// CheckStatusContext performs one bounded health/status request against
+// GET /?api=status. Transport problems are classified into the state taxonomy
+// instead of being propagated as panics. Cancelling ctx aborts the request,
+// which is how shutdown stops in-flight health checks.
+func (s *MKYBootServer) CheckStatusContext(ctx context.Context) CheckResult {
 	start := time.Now()
 	res := CheckResult{State: StateConnecting, CheckedAt: start}
 
-	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
+	// Honour the shorter of the package budget and the client's own budget so
+	// tests (and future configuration) can tighten the bound.
+	budget := statusTimeout
+	if s.statusClient != nil && s.statusClient.Timeout > 0 && s.statusClient.Timeout < budget {
+		budget = s.statusClient.Timeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+"/?api=status", nil)
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, s.baseURL+"/?api=status", nil)
 	if err != nil {
 		res.State = StateOffline
 		res.Detail = "cannot build request"
+		res.CheckedAt = time.Now()
 		return res
 	}
 
@@ -420,6 +534,13 @@ func (s *MKYBootServer) CheckStatus() CheckResult {
 	res.Latency = time.Since(start)
 	res.CheckedAt = time.Now()
 	if err != nil {
+		// A cancelled context means the caller is shutting down, not that the
+		// server is unhealthy. Report it distinctly so the caller can ignore it.
+		if ctx.Err() != nil {
+			res.State = StateOffline
+			res.Detail = "check cancelled"
+			return res
+		}
 		res.State, res.Detail = classifyTransportError(err)
 		return res
 	}
@@ -444,7 +565,7 @@ func (s *MKYBootServer) CheckStatus() CheckResult {
 		return res
 	case resp.StatusCode == http.StatusRequestTimeout:
 		res.State = StateTimeout
-		res.Detail = "HTTP 408"
+		res.Detail = "server reported HTTP 408"
 		return res
 	case resp.StatusCode >= 400:
 		// 404 and other 4xx/5xx: reachable but not the expected API surface.
@@ -480,8 +601,18 @@ func (s *MKYBootServer) CheckStatus() CheckResult {
 		res.Detail = "payload missing MKYBOOT status fields"
 		return res
 	}
-	res.State = StateOnline
-	res.Detail = fmt.Sprintf("MKYBOOT %s at %s", orDash(raw.Server.Version), orDash(raw.Server.IPv4))
+
+	down := make([]string, 0, 3)
+	if !raw.Services.DHCP {
+		down = append(down, "DHCP")
+	}
+	if !raw.Services.TFTP {
+		down = append(down, "TFTP")
+	}
+	if !raw.Services.ISCSI {
+		down = append(down, "iSCSI")
+	}
+
 	res.Status = &ServerStatus{
 		IPv4:            raw.Server.IPv4,
 		Version:         raw.Server.Version,
@@ -489,7 +620,53 @@ func (s *MKYBootServer) CheckStatus() CheckResult {
 		ClientsTotal:    raw.Clients.Total,
 		ClientsOnline:   raw.Clients.Online,
 		ClientsOffline:  raw.Clients.Offline,
-		ServicesRunning: raw.Services.DHCP && raw.Services.TFTP && raw.Services.ISCSI,
+		ServicesRunning: len(down) == 0,
+		DownServices:    down,
+	}
+	res.Detail = fmt.Sprintf("MKYBOOT %s at %s", orDash(raw.Server.Version), orDash(raw.Server.IPv4))
+	if len(down) > 0 {
+		// Reachable, serving the web UI, but clients cannot PXE boot reliably.
+		// Reporting this as plain Online hid the only actionable signal the
+		// status API provides.
+		res.State = StateDegraded
+		res.Detail += " - not running: " + strings.Join(down, ", ")
+		return res
+	}
+	res.State = StateOnline
+	return res
+}
+
+// CheckStatusRetry performs a status check with bounded retries and a short
+// backoff, so a server that is still coming up (or briefly blocked) is not
+// reported offline on the first probe.
+//
+// Only transient states are retried. A refusal, an HTTP error or a malformed
+// payload is a deterministic answer and is returned immediately - retrying
+// those only wastes time. Cancelling ctx stops immediately and returns the
+// last result.
+func (s *MKYBootServer) CheckStatusRetry(ctx context.Context) CheckResult {
+	var res CheckResult
+	for attempt := 0; attempt <= statusRetryAttempts; attempt++ {
+		if ctx.Err() != nil {
+			if attempt == 0 {
+				res = CheckResult{State: StateOffline, Detail: "check cancelled", CheckedAt: time.Now()}
+			}
+			return res
+		}
+		res = s.CheckStatusContext(ctx)
+		// Only a reachable-but-slow server benefits from another attempt, and
+		// only while we have not already established a definitive verdict.
+		if res.State != StateTimeout && res.State != StateConnecting {
+			return res
+		}
+		if attempt == statusRetryAttempts {
+			return res
+		}
+		select {
+		case <-ctx.Done():
+			return res
+		case <-time.After(statusRetryBackoff):
+		}
 	}
 	return res
 }

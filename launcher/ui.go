@@ -6,6 +6,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -141,9 +142,9 @@ func stateColor(s ServerState) uintptr {
 	switch s {
 	case StateOnline:
 		return colOnline
-	case StateConnecting:
+	case StateConnecting, StateStarting, StateStopping:
 		return colWarn
-	case StateUnauthorized:
+	case StateDegraded, StateUnauthorized, StateTimeout:
 		return colWarn
 	default:
 		return colOffline
@@ -205,23 +206,39 @@ func (a *App) infoLine(res CheckResult, notice string) string {
 		return notice
 	}
 	if res.Status != nil {
-		return fmt.Sprintf("Clients: %d/%d online - services %s",
-			res.Status.ClientsOnline, res.Status.ClientsTotal,
-			map[bool]string{true: "OK", false: "check server"}[res.Status.ServicesRunning])
+		svcs := map[bool]string{true: "OK", false: "check server"}[res.Status.ServicesRunning]
+		line := fmt.Sprintf("Clients: %d/%d online - services %s",
+			res.Status.ClientsOnline, res.Status.ClientsTotal, svcs)
+		if len(res.Status.DownServices) > 0 {
+			line += " (" + strings.Join(res.Status.DownServices, ", ") + " down)"
+		}
+		return line
+	}
+	if res.State == StateTimeout {
+		return "Server reachable but slow; it answers after blocking on per-client probes. Press Server Status to retry."
 	}
 	if res.AuthRequired {
 		return "Live details available after signing in on the dashboard."
+	}
+	if !res.State.Reachable() && res.Detail != "" {
+		return "Reason: " + res.Detail
 	}
 	return ""
 }
 
 // ---- window and control construction ----
 
-const errClassExists = 1410 // ERROR_CLASS_ALREADY_EXISTS
+const (
+	errClassExists = 1410 // ERROR_CLASS_ALREADY_EXISTS
+
+	// mainWindowClassName is the registered window class used to find an
+	// already-running instance for the foreground notification.
+	mainWindowClassName = "MkybootLauncherWnd"
+)
 
 // createMainWindow registers the window class and creates the main window.
 func (a *App) createMainWindow() error {
-	className := utf16Ptr("MkybootLauncherWnd")
+	className := utf16Ptr(mainWindowClassName)
 	title := utf16Ptr("MKYBOOT Launcher")
 	cursor, _, _ := procLoadCursorW.Call(0, uintptr(idcArrow))
 	a.iconMain = iconHandle(iconICO, 32)
@@ -512,6 +529,14 @@ func mainWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			a.refreshUI()
 		}
 		return 0
+	case wmAppForeground:
+		// A second launcher instance started and asked us to come forward.
+		if a != nil {
+			a.restoreFromTray()
+			a.requestCheck()
+			a.refreshUI()
+		}
+		return 0
 	case wmTrayIcon:
 		if a != nil {
 			a.trayCallback(lparam)
@@ -729,9 +754,12 @@ func (a *App) refreshUI() {
 
 // updateActionStates enables/disables buttons according to the current
 // server state and whether a control operation is running.
+//
+// "Server Status" is the retry action and stays available in every reachable
+// state and in every unreachable state, so a user is never stuck. The control
+// actions follow canControlServer: they require nginx to be answering.
 func (a *App) updateActionStates() {
 	res, _, busy, _ := a.stateSnapshot()
-	online := res.State == StateOnline
 	set := func(h uintptr, on bool) {
 		if h != 0 {
 			procEnableWindow.Call(h, b2u(on))
@@ -739,8 +767,8 @@ func (a *App) updateActionStates() {
 	}
 	available := !busy
 	set(a.hBtn[0], available) // Open Dashboard
-	set(a.hBtn[1], available) // Server Status
-	canControl := controlAPISupported && !busy && online
+	set(a.hBtn[1], available) // Server Status (retry)
+	canControl := controlAPISupported && !busy && canControlServer(res.State)
 	set(a.hBtn[2], canControl) // Restart Server
 	set(a.hBtn[3], canControl) // Stop Server
 }

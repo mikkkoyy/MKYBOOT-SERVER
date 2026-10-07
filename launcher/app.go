@@ -4,6 +4,7 @@ package main
 // flows (open dashboard, server status, restart, stop).
 
 import (
+	"context"
 	"errors"
 	"os"
 	"sync"
@@ -97,19 +98,28 @@ type App struct {
 	checkNow chan struct{}
 	noticeCh chan *Notice
 	pollStop chan struct{}
+	// stopCtx is cancelled when the launcher shuts down. Every background
+	// health check, retry loop and control verification is bound to it so no
+	// goroutine keeps working - or posting UI messages to a destroyed window -
+	// after the message loop has ended.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 }
 
 // NewApp loads configuration and prepares the launcher.
 func NewApp() (*App, error) {
 	cfg, cfgErr := LoadConfig()
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	a := &App{
-		cfg:      cfg,
-		cfgErr:   cfgErr,
-		checkNow: make(chan struct{}, 1),
-		noticeCh: make(chan *Notice, 8),
-		pollStop: make(chan struct{}),
-		btnOrig:  map[uintptr]uintptr{},
-		result:   CheckResult{State: StateConnecting, Detail: "Starting..."},
+		cfg:        cfg,
+		cfgErr:     cfgErr,
+		checkNow:   make(chan struct{}, 1),
+		noticeCh:   make(chan *Notice, 8),
+		pollStop:   make(chan struct{}),
+		stopCtx:    stopCtx,
+		stopCancel: stopCancel,
+		btnOrig:    map[uintptr]uintptr{},
+		result:     CheckResult{State: StateConnecting, Detail: "Checking server..."},
 	}
 	if exe, err := os.Executable(); err == nil {
 		a.exePath = exe
@@ -212,6 +222,8 @@ func (a *App) postNotice(title, text string, controlDone bool) {
 }
 
 // pollLoop runs on its own goroutine: periodic plus on-demand status checks.
+// Exactly one check is ever in flight, so repeated clicks or retries can never
+// stack up concurrent probes.
 func (a *App) pollLoop() {
 	ticker := time.NewTicker(statusPollInterval)
 	defer ticker.Stop()
@@ -219,11 +231,22 @@ func (a *App) pollLoop() {
 		select {
 		case <-a.pollStop:
 			return
+		case <-a.stopCtx.Done():
+			return
 		case <-ticker.C:
 		case <-a.checkNow:
 		}
 		srv := a.currentServer()
-		res := srv.CheckStatus()
+		if srv == nil {
+			continue
+		}
+		// Bounded retry: a server that is still coming up, or one whose worker
+		// is momentarily blocked on the per-client tgtadm probes, gets another
+		// chance before it is declared unreachable.
+		res := srv.CheckStatusRetry(a.stopCtx)
+		if a.stopCtx.Err() != nil {
+			return // shutting down: do not touch UI state
+		}
 		a.applyResult(srv.BaseURL(), res)
 		if a.hwnd != 0 {
 			postAppMessage(a.hwnd, wmAppStatus, 0, 0)
@@ -268,6 +291,7 @@ func (a *App) Run() {
 	}
 
 	close(a.pollStop)
+	a.stopCancel() // cancel in-flight health checks, retries and verification
 	a.trayRemove()
 }
 
@@ -319,7 +343,41 @@ func (a *App) openDashboard() {
 	}
 }
 
-// manualCheck forces an immediate status refresh from the UI.
+// canControlServer reports whether a restart/stop request can be sent to the
+// backend. All three states below mean nginx is alive and therefore serving the
+// control endpoint; only a refusal/timeout/garbage answer rules it out.
+//
+// Degraded counts: nginx answers fine, it is the diskless services (DHCP,
+// TFTP, iSCSI) that are down, and restarting nginx is a legitimate response.
+// Unauthorized counts too - the launcher signs in on demand.
+func canControlServer(s ServerState) bool {
+	switch s {
+	case StateOnline, StateDegraded, StateUnauthorized:
+		return true
+	default:
+		return false
+	}
+}
+
+// setTransientState shows the requested transition while the control request
+// and its verification are in flight.
+func (a *App) setTransientState(op ControlOp) {
+	st := StateStarting
+	detail := "Restart requested - waiting for the service to answer..."
+	if op == OpStop {
+		st = StateStopping
+		detail = "Stop requested - waiting for the service to go down..."
+	}
+	a.applyResult(a.currentURL(), CheckResult{
+		State:     st,
+		Detail:    detail,
+		CheckedAt: time.Now(),
+	})
+	a.refreshUI()
+}
+
+// manualCheck forces an immediate status refresh from the UI. This is the
+// launcher's retry action: it re-runs the bounded check sequence on demand.
 func (a *App) manualCheck() {
 	a.applyResult(a.currentURL(), CheckResult{
 		State:     StateConnecting,
@@ -446,11 +504,33 @@ func (a *App) controlFlow(op ControlOp) {
 	if busy {
 		return
 	}
-	if res.State != StateOnline {
-		a.showNotice("Server not reachable",
-			"Restart/Stop requires a reachable online server.\r\nCurrent state: "+res.State.String()+".")
+	if !canControlServer(res.State) {
+		// Be specific about why, instead of a generic "not reachable": the
+		// control API is served BY nginx, so it is genuinely unreachable while
+		// nginx is down - the launcher cannot restart nginx via nginx.
+		reason := res.Detail
+		if reason == "" {
+			reason = res.State.String()
+		}
+		if !res.State.Reachable() {
+			a.showNotice("Server control unavailable",
+				"Restart/Stop needs a reachable MKYBOOT server.\r\n"+
+					"Current state: "+res.State.String()+" - "+reason+".\r\n\r\n"+
+					"The control API is served by the same nginx process it controls, "+
+					"so it cannot be used while nginx is down. Start nginx on the "+
+					"MKYBOOT server (for example: sudo systemctl start nginx), then "+
+					"press Server Status to re-check.")
+			return
+		}
+		a.showNotice("Server control unavailable",
+			"Restart/Stop needs the server to finish its current transition.\r\n"+
+				"Current state: "+res.State.String()+" - "+reason+".")
 		return
 	}
+
+	// Reflect the requested transition immediately so the UI never claims
+	// Online while a restart/stop is in progress.
+	a.setTransientState(op)
 
 	verb := "Restart"
 	confirm := "Restart the MKYBOOT web service on " + a.currentURL() + "?\r\n\r\n" +
@@ -541,30 +621,52 @@ func (a *App) controlFlow(op ControlOp) {
 
 // verifyControl polls the server after a control operation until the expected
 // effect is observed or the verification window elapses.
+//
+// It aborts as soon as the launcher starts shutting down. Previously it slept
+// in a plain time.Sleep loop with no cancellation, so it kept polling - and
+// could still post a dialog to an already destroyed window - for up to
+// controlVerifyTimeout after the message loop had ended.
 func (a *App) verifyControl(srv *MKYBootServer, op ControlOp) bool {
 	deadline := time.Now().Add(controlVerifyTimeout)
-	first := true
-	for time.Now().Before(deadline) {
-		if first {
-			time.Sleep(verifyPollInterval)
-			first = false
-		} else {
-			time.Sleep(verifyPollInterval)
+	for {
+		if a.stopped() {
+			return false
 		}
-		res := srv.CheckStatus()
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-a.stopCtx.Done():
+			return false
+		case <-time.After(verifyPollInterval):
+		}
+		res := srv.CheckStatusContext(a.stopCtx)
+		if a.stopped() {
+			return false
+		}
 		a.applyResult(srv.BaseURL(), res)
 		if a.hwnd != 0 {
 			postAppMessage(a.hwnd, wmAppStatus, 0, 0)
 		}
 		if op == OpRestart {
-			if res.State == StateOnline {
+			// Online *or* Degraded both mean nginx is serving again.
+			if res.State == StateOnline || res.State == StateDegraded {
 				return true
 			}
 		} else if res.State == StateOffline || res.State == StateTimeout {
 			return true
 		}
 	}
-	return false
+}
+
+// stopped reports whether shutdown has begun.
+func (a *App) stopped() bool {
+	select {
+	case <-a.stopCtx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func opEffect(op ControlOp) string {
