@@ -5,8 +5,10 @@ repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 config="$repo/examples/etc/dhcp/dhcpd.conf"
 root="$repo/srv/tftp"
 if cmp -s <(head -c 3 "$config") <(printf '\357\273\277'); then
-    printf 'MISSING raw DHCP example starts with a UTF-8 BOM; validate a normalized copy, not the raw file\n'
+    printf 'FAIL raw DHCP example contains UTF-8 BOM\n'
+    exit 1
 fi
+printf 'PASS raw DHCP example has no UTF-8 BOM\n'
 for name in ipxe.kpxe ipxe.efi bg.png; do
     [ -s "$root/$name" ] || { printf 'FAIL missing TFTP asset: %s\n' "$name"; exit 1; }
     printf 'PASS TFTP asset: %s\n' "$name"

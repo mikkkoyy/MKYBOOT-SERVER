@@ -115,6 +115,13 @@ ok(out:find("option ipxe.no-pxedhcp 1", 1, true) ~= nil, "iPXE options emitted")
 section("32-bit UEFI filename is offered only when the file is installed")
 -- Not installed (the default): must NOT offer ipxe32.efi.
 local without = run()
+local defaultNames, onlyShipped = {}, true
+for name in without:gmatch('filename%s+"([^"]+)"') do
+  defaultNames[#defaultNames + 1] = name
+  if name ~= "ipxe.kpxe" and name ~= "ipxe.efi" then onlyShipped = false end
+end
+ok(#defaultNames > 0 and onlyShipped, "default DHCP filenames use only shipped boot artifacts",
+   table.concat(defaultNames, ", "))
 ok(without:find('filename "ipxe32.efi"', 1, true) == nil,
    "ipxe32.efi is not offered when it is not installed",
    "found ipxe32.efi in generated config")
