@@ -89,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/linux/check-pxe-assets.sh
-          /usr/sbin/dhcpd -t -cf examples/etc/dhcp/dhcpd.conf
+          sudo /usr/sbin/dhcpd -t -cf "$GITHUB_WORKSPACE/examples/etc/dhcp/dhcpd.conf"
           printf 'PASS DHCP syntax only; no DHCP server was started\n'
       - name: Check Go format, vet and cross-build Windows launcher
         shell: bash
@@ -117,7 +117,12 @@ jobs:
         working-directory: launcher
         run: |
           $ErrorActionPreference = 'Stop'
-          if (gofmt -l .) { throw 'gofmt reported unformatted files' }
+          go version
+          $unformatted = @(gofmt -l .)
+          if ($unformatted.Count -gt 0) {
+            $unformatted | ForEach-Object { "UNFORMATTED: $_" }
+            throw 'gofmt reported unformatted files'
+          }
           go vet -unsafeptr=false ./...
           if ($LASTEXITCODE -ne 0) { throw 'go vet failed' }
           go test -timeout 300s ./...
