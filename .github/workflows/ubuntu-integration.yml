@@ -89,13 +89,14 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/linux/check-pxe-assets.sh
-          dhcp_dir="$(mktemp -d /tmp/mkyboot-dhcp.XXXXXX)"
-          trap 'rm -rf "$dhcp_dir"' EXIT
-          chmod 755 "$dhcp_dir"
-          install -m 644 examples/etc/dhcp/dhcpd.conf "$dhcp_dir/dhcpd.conf"
-          sudo /usr/sbin/dhcpd -t -cf "$dhcp_dir/dhcpd.conf"
+          config="/etc/dhcp/mkyboot-ci-$RANDOM.conf"
+          [ ! -e "$config" ] || { printf 'FAIL temporary config already exists\n'; exit 1; }
+          trap 'sudo rm -f "$config"' EXIT
+          sudo install -m 644 examples/etc/dhcp/dhcpd.conf "$config"
+          sudo /usr/sbin/dhcpd -t -cf "$config"
           printf 'PASS DHCP syntax only; no DHCP server was started\n'
       - name: Check Go format, vet and cross-build Windows launcher
+        if: always()
         shell: bash
         working-directory: launcher
         run: |
@@ -106,6 +107,7 @@ jobs:
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags '-s -w -H windowsgui' -o "$RUNNER_TEMP/MKYBOOT Launcher.exe" .
           printf 'PASS Windows cross-build (tests run on the Windows job)\n'
       - name: Check patch whitespace
+        if: always()
         run: git diff --check
 
   windows-launcher-tests:
