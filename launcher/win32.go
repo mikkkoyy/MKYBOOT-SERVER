@@ -87,6 +87,16 @@ var (
 
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 
+	// Single-instance ownership (see instance.go).
+	procCreateMutexW         = kernel32.NewProc("CreateMutexW")
+	procWaitForSingleObject  = kernel32.NewProc("WaitForSingleObject")
+	procReleaseMutex         = kernel32.NewProc("ReleaseMutex")
+	procCloseHandle          = kernel32.NewProc("CloseHandle")
+	procProcessIdToSessionId = kernel32.NewProc("ProcessIdToSessionId")
+
+	procFindWindowW          = user32.NewProc("FindWindowW")
+	procPostMessageWToWindow = user32.NewProc("PostMessageW")
+
 	procRegOpenKeyExW   = advapi32.NewProc("RegOpenKeyExW")
 	procRegCreateKeyExW = advapi32.NewProc("RegCreateKeyExW")
 	procRegSetValueExW  = advapi32.NewProc("RegSetValueExW")
@@ -120,6 +130,9 @@ const (
 	wmAppStatus      = 0x8001 // WM_APP+1: status refresh
 	wmAppControl     = 0x8002 // WM_APP+2: control operation finished
 	wmAppNotice      = 0x8003 // WM_APP+3: post a notice dialog (lParam = *Notice)
+	// NOTE: 0x8004 is wmTrayIcon (WM_APP+4), declared in tray.go. The
+	// foreground notification therefore uses WM_APP+5.
+	wmAppForeground = 0x8005 // WM_APP+5: a second instance asked us to come forward
 
 	wsCaption     = 0x00C00000
 	wsSysMenu     = 0x00080000
