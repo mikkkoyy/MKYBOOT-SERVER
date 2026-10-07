@@ -1,5 +1,7 @@
 ﻿---#!/usr/bin/lua
 
+package.path = package.path .. ";src/?.lua"
+
 
 --tgtadm --lld iscsi --op new --mode target --tid 1 -T 											#CREATE TARGET
 --lld iscsi --op new --mode target --tid --lun 													#ADD LUN
@@ -452,34 +454,22 @@
 								else return false end
 							end
 					};
+		-- image lifecycle delegated to src/image.lua module
 		mkyboot.cmd.img = 	{
 							new 	= function(p_path,p_size)
-								if not mkyboot.inc.valid.img_path(p_path) then mkyboot.inc.log.warn("SECURITY", "img.new: invalid path="..tostring(p_path)); return false end
-								if not mkyboot.inc.valid.img_size(p_size) then mkyboot.inc.log.warn("SECURITY", "img.new: invalid size="..tostring(p_size)); return false end
-								return os.execute("/usr/bin/qemu-img -f qcow2 -o preallocation=metadata,compat=1.1,lazy_refcounts=on encryption=off "..p_path.." "..p_size);
+								return require("image").new(p_path,p_size)
 							end,
 							child 	= function(p_parrent,p_child)
-								if not mkyboot.inc.valid.img_path(p_parrent) then mkyboot.inc.log.warn("SECURITY", "img.child: invalid parent="..tostring(p_parrent)); return false end
-								if not mkyboot.inc.valid.img_path(p_child) then mkyboot.inc.log.warn("SECURITY", "img.child: invalid child="..tostring(p_child)); return false end
-								return os.execute("/usr/bin/qemu-img create -f qcow2 -b "..p_parrent.." "..p_child.." -o lazy_refcounts=on 2>>/tmp/result");
+								return require("image").child(p_parrent,p_child)
 							end,
 							del 	= function(p_image)
-								if not mkyboot.inc.valid.safe_path(p_image) then mkyboot.inc.log.warn("SECURITY", "img.del: invalid path="..tostring(p_image)); return false end
-								return os.remove(p_image);
+								return require("image").delete(p_image)
 							end,
 							commit 	= function(p_image)
-								if not mkyboot.inc.valid.safe_path(p_image) then mkyboot.inc.log.warn("SECURITY", "img.commit: invalid path="..tostring(p_image)); return false end
-								local fd = io.popen("/usr/bin/qemu-img commit "..p_image.." 2>&1")
-								local result = fd:read("a*")
-								fd:close()
-								return result
+								return require("image").commit(p_image)
 							end,
 							used 	= function(p_image)
-								if not mkyboot.inc.valid.safe_path(p_image) then return false end
-								local fd = io.popen("/usr/bin/lsof -t "..p_image.." 2>/dev/null")
-								local result = (#fd:read("a*") > 0)
-								fd:close()
-								return result
+								return require("image").used(p_image)
 							end
 							};
 
@@ -925,12 +915,309 @@
 				end;
 			end;				
 		end;
+--[[ NON-BLOCKING WORKSTATION / SERVICE STATUS SNAPSHOT
+	    ---------------------------------------------------------------------
+	    checkstatpc() used to run a blocking tgtadm+grep pipeline once per
+	    workstation, inside the HTTP request. With N workstations that is N
+	    process spawns and it stalls the entire nginx worker, which made the
+	    Windows launcher health check time out and disable recovery.
+
+	    Status is now produced by a bounded refresh that runs tgtadm exactly
+	    ONCE and parses every address out of that single response, plus at
+	    most three lsof probes. Request handlers only read the cached snapshot,
+	    so a slow or hung tgtadm can no longer delay a response.
+
+	    Design notes:
+	      * The snapshot lives in a small key=value file written atomically
+	        (temp file + rename). It is the single source of truth, so it is
+	        safe to share across nginx worker processes; no shared mutable
+	        Lua state is used.
+	      * The per-worker memo below is a read-only cache validated by the
+	        file mtime, so it can never serve a value that disagrees with the
+	        file for longer than one modification.
+	      * Every external command is wrapped in a hard timeout, and the whole
+	        refresh runs against one shared wall-clock budget.
+	      * A refresh is guarded by a timestamp lock so concurrent requests
+	        cannot start overlapping jobs.
+	      * Status is tri-state: "online", "offline" or "unknown". "unknown"
+	        covers a cold cache, a stale snapshot, a missing tgtadm binary and
+	        a failed command, and is deliberately NOT reported as offline.
+	--]]
+	mkyboot.inc.status = {}
+	mkyboot.inc.status.file       = "/srv/mkyboot/cfg/status.cache"
+	mkyboot.inc.status.lockfile   = "/srv/mkyboot/cfg/status.lock"
+	mkyboot.inc.status.ttl        = 5      -- seconds a snapshot counts as fresh
+	mkyboot.inc.status.max_age    = 60     -- beyond this the snapshot is stale
+	mkyboot.inc.status.budget     = 3.0    -- total wall-clock seconds per refresh
+	mkyboot.inc.status.lock_ttl   = 10     -- a lock older than this is considered abandoned
+	mkyboot.inc.status.tgtadm     = "/usr/sbin/tgtadm"
+	mkyboot.inc.status.lsof       = "/usr/bin/lsof"
+	mkyboot.inc.status.timeoutbin = "/usr/bin/timeout"
+	mkyboot.inc.status.memo       = nil
+
+	mkyboot.inc.valid.port = function(s)
+		local n = tonumber(s)
+		if n == nil or n ~= n then return false end
+		if n < 1 or n > 65535 or n ~= math.floor(n) then return false end
+		return true
+	end
+
+	-- true when path is an existing regular file.
+	mkyboot.inc.status.exe_exists = function(path)
+		if type(path) ~= "string" or #path == 0 or #path > 512 then return false end
+		local fd = io.open(path, "rb")
+		if fd then fd:close() return true end
+		return false
+	end
+
+	-- Wraps a constant command in a hard timeout so a hung binary cannot
+	-- wedge the refresh. Falls back to the bare command when the timeout
+	-- helper is not installed.
+	mkyboot.inc.status.wrap = function(cmd, seconds)
+		if mkyboot.inc.status.exe_exists(mkyboot.inc.status.timeoutbin) then
+			local t = tonumber(seconds)
+			if t == nil or t <= 0 then t = 0.2 end
+			if t > mkyboot.inc.status.budget then t = mkyboot.inc.status.budget end
+			return mkyboot.inc.status.timeoutbin .. " -s KILL " .. string.format("%.2f", t) .. " " .. cmd
+		end
+		return cmd
+	end
+
+	-- Runs a constant command and returns its output, or nil when it could
+	-- not be started. Callers supply the whole command string; no user input
+	-- reaches this function.
+	mkyboot.inc.status.run = function(cmd)
+		local fd = io.popen(cmd, "r")
+		if not fd then return nil end
+		local out = fd:read("*a")
+		fd:close()
+		if out == nil then return nil end
+		return out
+	end
+
+	-- Extracts every iSCSI client address from one tgtadm dump.
+	mkyboot.inc.status.parse_targets = function(out)
+		local ips = {}
+		if type(out) ~= "string" then return ips end
+		for ip in out:gmatch('IP Address:%s*"?([%d%.]+)"?') do
+			if mkyboot.inc.valid.ipv4(ip) then ips[ip] = true end
+		end
+		return ips
+	end
+
+	mkyboot.inc.status.encode = function(snap)
+		local out = {}
+		out[#out+1] = "v=1"
+		out[#out+1] = "ts=" .. tostring(snap.ts)
+		out[#out+1] = "targets=" .. tostring(snap.targets)
+		for ip in pairs(snap.ips or {}) do out[#out+1] = "ip=" .. ip end
+		out[#out+1] = "svc_dhcp="  .. tostring(snap.dhcp  and 1 or 0)
+		out[#out+1] = "svc_tftp="  .. tostring(snap.tftp  and 1 or 0)
+		out[#out+1] = "svc_iscsi=" .. tostring(snap.iscsi and 1 or 0)
+		return table.concat(out, "\n") .. "\n"
+	end
+
+	mkyboot.inc.status.decode = function(data)
+		if type(data) ~= "string" or #data == 0 then return nil end
+		if #data > 65536 then return nil end
+		local snap = { ips = {} }
+		for line in data:gmatch("[^\n]+") do
+			local k, v = line:match("^([%w_]+)=(.*)$")
+			if k then
+				if     k == "ts"       then snap.ts = tonumber(v)
+				elseif k == "targets"  then snap.targets = v
+				elseif k == "svc_dhcp" then snap.dhcp  = (v == "1")
+				elseif k == "svc_tftp" then snap.tftp  = (v == "1")
+				elseif k == "svc_iscsi" then snap.iscsi = (v == "1")
+				elseif k == "ip" then
+					if mkyboot.inc.valid.ipv4(v) then snap.ips[v] = true end
+				end
+			end
+		end
+		if snap.ts == nil then return nil end
+		return snap
+	end
+
+	-- Atomic publish: write a temp file then rename it over the snapshot.
+	--
+	-- On POSIX (the production platform) os.rename replaces the target
+	-- atomically, so a reader never observes a partial file. On Windows
+	-- os.rename fails when the target exists and returns nil without raising,
+	-- so we fall back to remove+rename. The fallback loses atomicity, which is
+	-- why the module treats the file as disposable and re-reads on every parse.
+	mkyboot.inc.status.write = function(snap)
+		local suffix = ""
+		if mkyboot.inc.random and mkyboot.inc.random.hex then
+			suffix = tostring(mkyboot.inc.random.hex(4) or "")
+		end
+		local tmp = mkyboot.inc.status.file .. ".tmp" .. suffix
+		local fd = io.open(tmp, "wb")
+		if not fd then return false end
+		fd:write(mkyboot.inc.status.encode(snap))
+		fd:close()
+		local ok = os.rename(tmp, mkyboot.inc.status.file)
+		if not ok then
+			os.remove(mkyboot.inc.status.file)
+			ok = os.rename(tmp, mkyboot.inc.status.file)
+		end
+		if not ok then os.remove(tmp) end
+		return ok
+	end
+
+	mkyboot.inc.status.read = function()
+		local fd = io.open(mkyboot.inc.status.file, "rb")
+		if not fd then return nil end
+		local data = fd:read("*a")
+		fd:close()
+		return mkyboot.inc.status.decode(data)
+	end
+
+	-- Returns the current snapshot, reusing the per-worker decode while the
+	-- file mtime is unchanged. mtime comes from LuaFileSystem when available.
+	mkyboot.inc.status.get = function()
+		local stamp
+		if lfs and lfs.attributes then stamp = lfs.attributes(mkyboot.inc.status.file, "modification") end
+		if stamp and mkyboot.inc.status.memo and mkyboot.inc.status.memo.stamp == stamp then
+			return mkyboot.inc.status.memo.snap
+		end
+		local snap = mkyboot.inc.status.read()
+		mkyboot.inc.status.memo = { stamp = stamp, snap = snap }
+		return snap
+	end
+
+	mkyboot.inc.status.age = function(snap)
+		if not snap or snap.ts == nil then return nil end
+		local age = os.time() - snap.ts
+		if age < 0 then return nil end
+		return age
+	end
+
+	-- Tri-state status of one workstation against a snapshot.
+	mkyboot.inc.status.state_of = function(snap, p_ip)
+		if not mkyboot.inc.valid.ipv4(p_ip) then return "unknown" end
+		local age = mkyboot.inc.status.age(snap)
+		if age == nil or age > mkyboot.inc.status.max_age then return "unknown" end
+		if snap.targets ~= "ok" then return "unknown" end
+		if snap.ips[p_ip] then return "online" end
+		return "offline"
+	end
+
+	-- Refresh guard. Returns true only for the caller that took the lock.
+	mkyboot.inc.status.lock = function()
+		local now = os.time()
+		local fd = io.open(mkyboot.inc.status.lockfile, "rb")
+		if fd then
+			local held = tonumber(fd:read("*a"))
+			fd:close()
+			if held ~= nil and (now - held) < mkyboot.inc.status.lock_ttl then
+				return false
+			end
+		end
+		local w = io.open(mkyboot.inc.status.lockfile, "wb")
+		if not w then return false end
+		w:write(tostring(now))
+		w:close()
+		return true
+	end
+
+	mkyboot.inc.status.count_ips = function(snap)
+		local n = 0
+		for _ in pairs(snap.ips or {}) do n = n + 1 end
+		return n
+	end
+
+	-- Collects a fresh snapshot. Runs at most one tgtadm and three lsof
+	-- probes, all under one shared time budget.
+	mkyboot.inc.status.refresh = function()
+		if not mkyboot.inc.status.lock() then return false end
+
+		local deadline = mkyboot.inc.status.budget
+		local function left()
+			return deadline
+		end
+
+		local snap = { ts = os.time(), ips = {}, targets = "missing" }
+
+		if mkyboot.inc.status.exe_exists(mkyboot.inc.status.tgtadm) then
+			deadline = deadline - 1.0
+			local cmd = mkyboot.inc.status.wrap(mkyboot.inc.status.tgtadm ..
+				" --lld iscsi --op show --mode target", left())
+			local out = mkyboot.inc.status.run(cmd)
+			if out ~= nil then
+				snap.targets = "ok"
+				snap.ips = mkyboot.inc.status.parse_targets(out)
+			else
+				snap.targets = "failed"
+			end
+		end
+
+		if mkyboot.inc.status.exe_exists(mkyboot.inc.status.lsof) then
+			local function probe(port, key)
+				if not mkyboot.inc.valid.port(port) then return end
+				if left() <= 0 then return end
+				local out = mkyboot.inc.status.run(mkyboot.inc.status.wrap(
+					mkyboot.inc.status.lsof .. " -t -i:" .. tostring(tonumber(port)), left()))
+				snap[key] = (out ~= nil and #out > 0)
+			end
+			probe(mkyboot.cfg.dhcp  and mkyboot.cfg.dhcp.port,  "dhcp")
+			probe(mkyboot.cfg.tftp  and mkyboot.cfg.tftp.port,  "tftp")
+			probe(mkyboot.cfg.iscsi and mkyboot.cfg.iscsi.port, "iscsi")
+		end
+
+		local ok = mkyboot.inc.status.write(snap)
+		mkyboot.inc.status.memo = nil
+		if ok then
+			mkyboot.inc.log.info("STATUS", "snapshot refreshed: targets=" .. tostring(snap.targets) ..
+				" addresses=" .. tostring(mkyboot.inc.status.count_ips(snap)))
+		else
+			mkyboot.inc.log.warn("STATUS", "snapshot write failed")
+		end
+		return ok
+	end
+
+	-- Returns a usable snapshot for a request.
+	--  * fresh snapshot  -> returned as-is, no command executed
+	--  * stale/cold      -> one bounded synchronous refresh, then re-read
+	--                       (worst case ~status.budget seconds, and never one
+	--                       command per workstation)
+	mkyboot.inc.status.ensure = function()
+		local snap = mkyboot.inc.status.get()
+		local age = mkyboot.inc.status.age(snap)
+		if age ~= nil and age <= mkyboot.inc.status.ttl then return snap, false end
+
+		-- Try a background refresh first; if one is already running the lock
+		-- makes this a no-op and we simply serve whatever we have.
+		if ngx and ngx.timer and ngx.timer.at then
+			pcall(ngx.timer.at, 0, function(premature)
+				if premature then return end
+				mkyboot.inc.status.refresh()
+			end)
+		end
+
+		if age == nil then
+			-- Cold start: nothing to serve. Do one bounded synchronous pass so
+			-- the first request after boot still reports real status instead
+			-- of a false "unknown"/degraded.
+			mkyboot.inc.status.refresh()
+			return mkyboot.inc.status.get(), true
+		end
+		-- Stale but present: serve the previous snapshot and let the background
+		-- refresh replace it. Never block on a hung tgtadm.
+		return snap, false
+	end
+
 		function mkyboot:checkstatpc(p_ip)
 			if not mkyboot.inc.valid.ipv4(p_ip) then return false end
-			local fd = io.popen("/usr/sbin/tgtadm --lld iscsi --op show --mode target 2>/dev/null | /usr/bin/grep 'IP Address: "..p_ip.."' 2>/dev/null")
-			local result = (#fd:read("a*") > 0)
-			fd:close()
-			return result
+			-- Reads the cached snapshot only. No command is executed here.
+			return mkyboot.inc.status.state_of(mkyboot.inc.status.get(), p_ip) == "online"
+		end;
+
+		-- Tri-state variant used by the API layer. Returns "online", "offline"
+		-- or "unknown"; callers must not treat "unknown" as offline.
+		function mkyboot:statpc_state(p_ip)
+			if not mkyboot.inc.valid.ipv4(p_ip) then return "unknown" end
+			local snap = mkyboot.inc.status.get()
+			return mkyboot.inc.status.state_of(snap, p_ip)
 		end;
 	
 
@@ -1383,28 +1670,47 @@
 			return result
 		end
 		mkyboot.inc.api.get_server_status = function()
+			-- Reads the cached snapshot; at most one bounded refresh is
+			-- triggered here and never one command per workstation.
+			local snap, refreshed = mkyboot.inc.status.ensure()
+			local age = mkyboot.inc.status.age(snap)
+
 			local status = {
 				server = {
 					ipv4 = mkyboot.cfg.server.ipv4,
 					version = mkyboot.cfg.server.version,
 					vendor = mkyboot.cfg.server.vendor
 				},
-				clients = { total = 0, online = 0, offline = 0 },
+				clients = { total = 0, online = 0, offline = 0, unknown = 0 },
 				iscsi = { port = mkyboot.cfg.iscsi.port, iqn = mkyboot.cfg.iscsi.iqn },
 				images = mkyboot.inc.api.list_images(),
 				services = {
-					dhcp = mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.dhcp.port),
-					tftp = mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.tftp.port),
-					iscsi = mkyboot.inc.lsof("-t -i:"..mkyboot.cfg.iscsi.port)
+					dhcp  = (snap ~= nil and snap.dhcp  == true) or false,
+					tftp  = (snap ~= nil and snap.tftp  == true) or false,
+					iscsi = (snap ~= nil and snap.iscsi == true) or false
+				},
+				-- Additive fields. Existing clients keep working unchanged.
+				status = {
+					fresh    = (age ~= nil and age <= mkyboot.inc.status.ttl) or false,
+					stale    = (age == nil or age > mkyboot.inc.status.max_age),
+					age      = age or -1,
+					targets  = (snap ~= nil and snap.targets) or "missing",
+					refreshed = refreshed and true or false
 				}
 			}
 			for i,v in ipairs(mkyboot.cfg.wks) do
 				if v ~= nil and v.name ~= nil then
 					status.clients.total = status.clients.total + 1
-					if mkyboot:checkstatpc(v.ipv4) then
+					-- Tri-state. A workstation whose status cannot be
+					-- confirmed (cold cache, stale snapshot, missing tgtadm,
+					-- failed command) is counted as unknown, NOT offline.
+					local st = mkyboot.inc.status.state_of(snap, v.ipv4)
+					if st == "online" then
 						status.clients.online = status.clients.online + 1
-					else
+					elseif st == "offline" then
 						status.clients.offline = status.clients.offline + 1
+					else
+						status.clients.unknown = status.clients.unknown + 1
 					end
 				end
 			end
@@ -1816,6 +2122,43 @@
 			   			end
 			   		end
 			   		ngx.say(json.encode(lines))
+			   elseif ngx.var.arg_api == "server" and ngx.var.arg_op ~= nil then
+					if not mkyboot.inc.session.validate() then
+						ngx.header.content_type = 'application/json'
+						ngx.say('{"error":"Not authenticated"}')
+						return
+					end
+					local origin = ngx.var.http_origin or ngx.var.http_referer or ""
+					local server_host = mkyboot.cfg.server.ipv4 or "127.0.0.1"
+					if origin ~= "" and not origin:find(server_host, 1, true) and origin ~= "http://127.0.0.1:8888" and origin ~= "http://localhost:8888" then
+						ngx.header.content_type = 'application/json'
+						ngx.say('{"error":"Invalid origin"}')
+						return
+					end
+					if ngx.var.arg_op == "restart" then
+						ngx.header.content_type = 'application/json'
+						local ok, err = pcall(mkyboot.inc.systemctl, "nginx", "restart")
+						if ok and err then
+							mkyboot.inc.log.info("ADMIN", "Server restarted by session user")
+							ngx.say(json.encode({success=true, action="restart"}))
+						else
+							mkyboot.inc.log.error("ADMIN", "Server restart failed: "..tostring(err))
+							ngx.say(json.encode({success=false, action="restart", error=tostring(err)}))
+						end
+					elseif ngx.var.arg_op == "stop" then
+						ngx.header.content_type = 'application/json'
+						local ok, err = pcall(mkyboot.inc.systemctl, "nginx", "stop")
+						if ok and err then
+							mkyboot.inc.log.info("ADMIN", "Server stopped by session user")
+							ngx.say(json.encode({success=true, action="stop"}))
+						else
+							mkyboot.inc.log.error("ADMIN", "Server stop failed: "..tostring(err))
+							ngx.say(json.encode({success=false, action="stop", error=tostring(err)}))
+						end
+					else
+						ngx.header.content_type = 'application/json'
+						ngx.say('{"error":"Invalid server operation"}')
+					end
 			   elseif ngx.var.arg_status == "true" then
 			   		--[[ CHECK AUTHENTICATION FOR ADMIN PAGES ]]--
 					if not mkyboot.inc.auth.is_configured() then
