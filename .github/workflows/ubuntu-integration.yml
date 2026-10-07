@@ -92,9 +92,15 @@ jobs:
           config="/etc/dhcp/mkyboot-ci-$RANDOM.conf"
           [ ! -e "$config" ] || { printf 'FAIL temporary config already exists\n'; exit 1; }
           trap 'sudo rm -f "$config"' EXIT
-          sudo install -m 644 examples/etc/dhcp/dhcpd.conf "$config"
+          if cmp -s <(head -c 3 examples/etc/dhcp/dhcpd.conf) <(printf '\357\273\277'); then
+            printf 'MISSING raw DHCP example has a BOM; syntax-checking a BOM-stripped copy\n'
+            tail -c +4 examples/etc/dhcp/dhcpd.conf | sudo tee "$config" > /dev/null
+            sudo chmod 644 "$config"
+          else
+            sudo install -m 644 examples/etc/dhcp/dhcpd.conf "$config"
+          fi
           sudo /usr/sbin/dhcpd -t -cf "$config"
-          printf 'PASS DHCP syntax only; no DHCP server was started\n'
+          printf 'PASS normalized DHCP syntax only; no DHCP server was started\n'
       - name: Check Go format, vet and cross-build Windows launcher
         if: always()
         shell: bash
