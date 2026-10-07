@@ -13,6 +13,14 @@
     Defaults to bin/mkyctl.lua. Point it at any of the three copies.
 --]]
 
+if _VERSION == "Lua 5.1" then
+  load = function(chunk, name, mode, env)
+    local fn, err = loadstring(chunk, name)
+    if fn and env then setfenv(fn, env) end
+    return fn, err
+  end
+end
+
 local src = arg[1] or "bin/mkyctl.lua"
 
 local passed, failed = 0, 0

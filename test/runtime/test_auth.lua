@@ -12,6 +12,14 @@
       lua test/runtime/test_auth.lua [path/to/mkyctl.lua]
 --]]
 
+if _VERSION == "Lua 5.1" then
+  load = function(chunk, name, mode, env)
+    local fn, err = loadstring(chunk, name)
+    if fn and env then setfenv(fn, env) end
+    return fn, err
+  end
+end
+
 local src = arg[1] or "bin/mkyctl.lua"
 
 local passed, failed = 0, 0
@@ -217,7 +225,7 @@ local ngx = {
     while i <= #s do
       local a, b, c = s:byte(i, i + 2)
       local n = a * 65536 + (b or 0) * 256 + (c or 0)
-      local x, y, z = n % 64, (n // 64) % 64, (n // 4096) % 64
+      local x, y, z = n % 64, math.floor(n / 64) % 64, math.floor(n / 4096) % 64
       out[#out + 1] = B:sub(x + 1, x + 1) .. B:sub(y + 1, y + 1)
       if b then out[#out + 1] = B:sub(z + 1, z + 1) else out[#out + 1] = "=" end
       if c then out[#out + 1] = "=" end

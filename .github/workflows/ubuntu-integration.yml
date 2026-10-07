@@ -1,0 +1,130 @@
+name: Ubuntu integration readiness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-source-validation:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: launcher/go.mod
+          cache: false
+      - name: Install test interpreters and DHCP syntax checker without starting services
+        shell: bash
+        run: |
+          set -euo pipefail
+          backup="$RUNNER_TEMP/policy-rc.d.backup"
+          if [ -e /usr/sbin/policy-rc.d ]; then
+            sudo cp -p /usr/sbin/policy-rc.d "$backup"
+          fi
+          restore_policy() {
+            if [ -e "$backup" ]; then
+              sudo cp -p "$backup" /usr/sbin/policy-rc.d
+            else
+              sudo rm -f /usr/sbin/policy-rc.d
+            fi
+          }
+          trap restore_policy EXIT
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d > /dev/null
+          sudo chmod 755 /usr/sbin/policy-rc.d
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lua5.4 luajit isc-dhcp-server
+      - name: Check dependencies and shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/linux/check-deps.sh
+          for script in install.sh test/runtime/*.sh tools/linux/*.sh; do
+            bash -n "$script"
+            printf 'PASS bash -n %s\n' "$script"
+          done
+          bash tools/linux/check-install-layout.sh
+      - name: Validate Lua syntax with both interpreters
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in bin/*.lua src/cfg.lua src/image.lua srv/mkyboot/*.lua test/srv/mkyboot/*.lua test/runtime/*.lua; do
+            luac5.4 -p "$file"
+            printf 'PASS luac5.4 %s\n' "$file"
+          done
+          for file in bin/*.lua src/cfg.lua src/image.lua srv/mkyboot/*.lua test/srv/mkyboot/*.lua; do
+            luajit -b "$file" "$RUNNER_TEMP/mkyboot.ljbc"
+            printf 'PASS LuaJIT syntax %s\n' "$file"
+          done
+      - name: Run isolated Lua regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for source in bin/mkyctl.lua srv/mkyboot/mkyctl.lua test/srv/mkyboot/mkyctl.lua; do
+            for suite in test_status_cache test_server_control test_auth test_dhcp_export; do
+              lua5.4 "test/runtime/$suite.lua" "$source"
+              printf 'PASS %s on %s\n' "$suite" "$source"
+            done
+          done
+          lua5.4 test/runtime/test_deploy_wiring.lua .
+          lua5.4 test/runtime/measure_status_perf.lua bin/mkyctl.lua
+      - name: Test module resolution from unrelated working directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_WORKSPACE"
+          other="$(mktemp -d)"
+          trap 'rmdir "$other"' EXIT
+          for dir in / /tmp "$other" "$repo"; do
+            (cd "$dir" && lua5.4 "$repo/test/runtime/test_module_path.lua" "$repo/bin/mkyctl.lua")
+            printf 'PASS module path from %s\n' "$dir"
+          done
+      - name: Validate static PXE configuration and DHCP syntax only
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/linux/check-pxe-assets.sh
+          /usr/sbin/dhcpd -t -cf examples/etc/dhcp/dhcpd.conf
+          printf 'PASS DHCP syntax only; no DHCP server was started\n'
+      - name: Check Go format, vet and cross-build Windows launcher
+        shell: bash
+        working-directory: launcher
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l *.go)"
+          [ -z "$unformatted" ] || { printf 'FAIL gofmt: %s\n' "$unformatted"; exit 1; }
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go vet -unsafeptr=false ./...
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags '-s -w -H windowsgui' -o "$RUNNER_TEMP/MKYBOOT Launcher.exe" .
+          printf 'PASS Windows cross-build (tests run on the Windows job)\n'
+      - name: Check patch whitespace
+        run: git diff --check
+
+  windows-launcher-tests:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: launcher/go.mod
+          cache: false
+      - name: Validate launcher Go format, vet, tests and build
+        shell: pwsh
+        working-directory: launcher
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (gofmt -l .) { throw 'gofmt reported unformatted files' }
+          go vet -unsafeptr=false ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go vet failed' }
+          go test -timeout 300s ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go test failed' }
+          $env:CGO_ENABLED = '0'
+          go build -trimpath -ldflags '-s -w -H windowsgui' -o "$env:RUNNER_TEMP/MKYBOOT Launcher.exe" .
+          if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
+          'PASS: Go format, vet, tests and Windows build'
+      - name: Check patch whitespace
+        run: git diff --check
