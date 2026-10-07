@@ -89,7 +89,11 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/linux/check-pxe-assets.sh
-          sudo /usr/sbin/dhcpd -t -cf "$GITHUB_WORKSPACE/examples/etc/dhcp/dhcpd.conf"
+          dhcp_dir="$(mktemp -d /tmp/mkyboot-dhcp.XXXXXX)"
+          trap 'rm -rf "$dhcp_dir"' EXIT
+          chmod 755 "$dhcp_dir"
+          install -m 644 examples/etc/dhcp/dhcpd.conf "$dhcp_dir/dhcpd.conf"
+          sudo /usr/sbin/dhcpd -t -cf "$dhcp_dir/dhcpd.conf"
           printf 'PASS DHCP syntax only; no DHCP server was started\n'
       - name: Check Go format, vet and cross-build Windows launcher
         shell: bash
@@ -112,17 +116,12 @@ jobs:
         with:
           go-version-file: launcher/go.mod
           cache: false
-      - name: Validate launcher Go format, vet, tests and build
+      - name: Validate launcher Go vet, tests and build
         shell: pwsh
         working-directory: launcher
         run: |
           $ErrorActionPreference = 'Stop'
           go version
-          $unformatted = @(gofmt -l .)
-          if ($unformatted.Count -gt 0) {
-            $unformatted | ForEach-Object { "UNFORMATTED: $_" }
-            throw 'gofmt reported unformatted files'
-          }
           go vet -unsafeptr=false ./...
           if ($LASTEXITCODE -ne 0) { throw 'go vet failed' }
           go test -timeout 300s ./...
@@ -130,6 +129,6 @@ jobs:
           $env:CGO_ENABLED = '0'
           go build -trimpath -ldflags '-s -w -H windowsgui' -o "$env:RUNNER_TEMP/MKYBOOT Launcher.exe" .
           if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
-          'PASS: Go format, vet, tests and Windows build'
+          'PASS: Go vet, tests and Windows build (format checked on Ubuntu)'
       - name: Check patch whitespace
         run: git diff --check
