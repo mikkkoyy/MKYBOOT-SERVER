@@ -1,12 +1,12 @@
 # MKYBOOT-SERVER — Phase 4C: Lab setup and readiness
 
-**Status: Readiness documented. No real PXE acceptance is claimed. No lab was created, no Windows feature was enabled, no BIOS/UEFI setting was changed, no VM was built, and no network service was started.**
+**Status: Readiness documented. No real PXE acceptance is claimed.** VirtualBox 7.2.20 has been installed on drive `D:` and the lab folders exist, but **no VM has been created and no VM will start while AMD SVM remains disabled in firmware**. No Windows feature was enabled, no BIOS/UEFI setting was changed, no network adapter or firewall rule was altered, and no network service (DHCP/TFTP/iSCSI) was started.
 
 | Repository | Branch | Commit |
 |---|---|---|
-| `mikkkoyy/MKYBOOT-SERVER` | `main` | `05925e0301625e98bcac9d0756344190b0bd0b6a` |
+| `mikkkoyy/MKYBOOT-SERVER` | `main` | `3b8e1201030a39de9defa445c3e51b406f72c45f` |
 
-This document records a **read-only** inspection of the current Windows host, selects the safest practical path to a real Ubuntu PXE/diskless acceptance lab, and lists the exact next actions required from the operator. It reuses the existing `docs/PHASE4A_PXE_TEST_NETWORK.md` for the network topology and acceptance sequence rather than replacing it. No application code was changed.
+This document records a **read-only** inspection of the current Windows host, selects the safest practical path to a real Ubuntu PXE/diskless acceptance lab, records the verified VirtualBox installation, and lists the exact next actions required from the operator. It reuses the existing `docs/PHASE4A_PXE_TEST_NETWORK.md` for the network topology and acceptance sequence rather than replacing it. No application code was changed.
 
 ## 1. Readiness findings (this host, read-only)
 
@@ -17,10 +17,10 @@ This document records a **read-only** inspection of the current Windows host, se
 | Firmware virtualization | `VirtualizationFirmwareEnabled = False` (AMD SVM/VT is **off** in BIOS/UEFI) | Nested/accelerated virtualization is currently **disabled**. Enabling it requires a manual BIOS/UEFI change, which this phase does **not** perform. |
 | Windows virtualization features | WSL, `HypervisorPlatform`, `VirtualMachinePlatform` — all **Disabled** | WSL2 and WSA cannot run until features are enabled. |
 | WSL / Ubuntu | No distributions installed; no WSL2 kernel present | No Linux environment available today. |
-| Third-party hypervisors | VirtualBox, VMware, QEMU, Docker — **none installed** | A hypervisor would have to be installed. |
+| Third-party hypervisors | **VirtualBox 7.2.20r175154 installed** at `D:\Program Files\Oracle\VirtualBox`; default VM folder set to `D:\MKYBOOT-Lab\VMs` | Hypervisor is present. VMware/QEMU/Docker still not installed (not required). |
 | RAM | 15.8 GB total, ~8.9 GB free | Enough for one Ubuntu server VM + one small PXE client VM if RAM is reclaimed, but tight alongside the host OS. |
-| Disk (C:) | 116.6 GB total, **only 7.6 GB free** | **Insufficient** for VM images on `C:`. |
-| Disk (D:) | 180.9 GB total, **126.1 GB free** | Usable for VM storage and ZFS test pool if a VM is created on `D:`. |
+| Disk (C:) | 116.6 GB total, **7.4 GB free** (verified post-install) | **Insufficient** for VM images on `C:`. |
+| Disk (D:) | 180.9 GB total, **125.6 GB free** (verified post-install) | Usable for VM storage and ZFS test pool; all VM disks must live on `D:`. |
 | Network adapters | Single physical `Ethernet` (Realtek PCIe GBE, `50-EB-F6-23-6B-44`), production LAN `30.0.0.55/24`, gateway `30.0.0.1` | **No private/virtual switch and no second adapter exist.** Any lab network must be created without disturbing this production NIC. |
 | PXE client | No physical PXE machine, no VM | Must be provisioned. |
 
@@ -29,26 +29,27 @@ This document records a **read-only** inspection of the current Windows host, se
 | Requirement | Verdict | Note |
 |---|---|---|
 | Ubuntu runtime available now | BLOCKED | No Linux installed; WSL disabled; firmware VT off |
-| Local accelerated virtualization possible today | BLOCKED | Firmware VT off **and** Windows Home lacks Hyper-V |
-| Hypervisor installed | BLOCKED | None present |
-| Disposable storage ≥ image size | PASS (on `D:`) | 126.1 GB free on `D:`; `C:` too small (7.6 GB) |
+| Local accelerated virtualization possible today | BLOCKED | Firmware VT (SVM) still off in BIOS/UEFI; must be enabled manually |
+| Hypervisor installed | **PASS** | VirtualBox 7.2.20r175154 on `D:` (verified) |
+| Disposable storage ≥ image size | PASS (on `D:`) | 125.6 GB free on `D:`; `C:` too small (7.4 GB) |
 | RAM for 2 VMs | MARGINAL | 15.8 GB total / ~8.9 GB free |
-| Isolated/private network available now | BLOCKED | Single production NIC; no private switch |
-| Production network must stay untouched | PASS (by design) | This phase changes nothing; guidance below forbids touching `30.0.0.0/24` |
+| Isolated/private network available now | BLOCKED | Single production NIC; no private switch yet (VirtualBox Internal Network will provide it) |
+| Production network must stay untouched | PASS (by design) | No production NIC/firewall changed; guidance below forbids touching `30.0.0.0/24` |
 
-**Bottom line:** a **local** virtual lab is **not ready today**. It is *possible* only after operator-approved, manual changes: enable AMD SVM/VT in BIOS/UEFI, and either (a) install a third-party hypervisor (VirtualBox/VMware Workstation Player/QEMU) — which does **not** require upgrading Windows — or (b) upgrade to Windows Pro for Hyper-V. Until then, the recommended path is an **authorized separate Ubuntu machine** (or authorized remote lab).
+**Bottom line:** VirtualBox 7.2.20 is now installed on `D:` (hypervisor ready), but the **only remaining blocker for a local virtual lab is AMD SVM/VT, which is still disabled in firmware.** The operator must enable SVM/VT in BIOS/UEFI manually; then the local virtual lab (Option 1) becomes viable. Until SVM is enabled, no VM can be created or started. An **authorized separate Ubuntu machine** (Option 2) remains an equally valid path that needs no change to this Windows host.
 
 ## 2. Lab-path selection
 
 Evaluated in the order the phase prescribes.
 
-### Option 1 — Local isolated virtual lab (NOT ready today; possible after manual, operator-approved changes)
+### Option 1 — Local isolated virtual lab (hypervisor READY; blocked only by firmware SVM/VT)
 
-- **What it takes:** (a) enable AMD SVM / "Virtualization Technology" in BIOS/UEFI; (b) install a hypervisor. Because this is **Windows Home**, Hyper-V is unavailable, so use **VirtualBox**, **VMware Workstation Player**, or **QEMU/KVM**. WSL2 also requires firmware VT plus the `VirtualMachinePlatform` feature, but WSL2 is a poor fit here — a WSL2 VM cannot easily serve PXE to another VM and has no isolated L2 switch, so a full hypervisor is preferred.
-- **Advantages:** fully self-contained; no cloud cost; two VMs (server + client) fit on this CPU (6C/12T) and `D:` storage (126 GB free).
-- **Limitations:** requires a manual BIOS/UEFI change (cannot be done safely in software); tight RAM (15.8 GB total) — host + 2 VMs is workable but not comfortable; PXE inside one hypervisor needs an **internal/host-only** network so the client reaches the server VM but **not** the host LAN.
-- **Approx. resources:** Ubuntu server VM 2 vCPU / 4 GB / 40 GB; PXE client VM 2 vCPU / 2 GB / 4 GB; store VM disks on `D:`.
-- **Next actions (operator):** reboot → BIOS → enable SVM/VT → install VirtualBox (or QEMU) → create an **Internal Network** named `mkyboot` (no host uplink) → attach both VMs to it.
+- **Hypervisor status:** VirtualBox **7.2.20r175154** is installed at `D:\Program Files\Oracle\VirtualBox`, default machine folder is `D:\MKYBOOT-Lab\VMs`, and the lab folders (`VMs`, `ISO`, `Files`) exist under `D:\MKYBOOT-Lab\`. Windows Home lacks Hyper-V, but VirtualBox does not require it.
+- **What it takes now:** the **only** remaining step is to enable AMD SVM / "Virtualization Technology" in BIOS/UEFI (manual, by the operator — see §4.2). WSL2 is not needed and not recommended for this lab (no isolated L2 switch, poor PXE-to-VM fit).
+- **Advantages:** fully self-contained; no cloud cost; two VMs (server + client) fit on this CPU (6C/12T) and `D:` storage (125.6 GB free).
+- **Limitations:** AMD SVM/VT is **still disabled in firmware** (verified: `VirtualizationFirmwareEnabled = False`), so **no VM can run yet**; tight RAM (15.8 GB total) — host + 2 VMs is workable but not comfortable; PXE inside one hypervisor needs an **internal** network (VirtualBox Internal Network) so the client reaches the server VM but **not** the host LAN.
+- **Approx. resources:** Ubuntu server VM 2 vCPU / 4 GB / 40 GB; PXE client VM 2 vCPU / 2 GB / 4 GB; store all VM disks on `D:`.
+- **Next actions (operator):** enable SVM/VT in BIOS → verify (§4.3) → create the `mkyboot` Internal Network (§4.4) → build the server and client VMs (§4.5).
 
 ### Option 2 — Separate authorized Linux machine (RECOMMENDED if local VMs are not enabled)
 
@@ -64,7 +65,7 @@ Evaluated in the order the phase prescribes.
 - **Constraints:** **no paid resources, cloud accounts, or provisioning may be created without explicit user approval.** Many cloud VMs cannot bridge an isolated L2 for PXE or cannot expose nested VT; this is often the least practical option.
 - **Next actions (operator):** provide authorized access details; only then proceed. This phase does not provision anything.
 
-**Selected option: Option 2 (authorized separate Ubuntu machine on an isolated switch)** as the primary recommendation, because it needs no risky change to this Windows Home host and yields the most trustworthy real PXE evidence. **Option 1 (local VMs) is the fallback** if the operator enables firmware VT and installs a hypervisor. **Option 3 is last resort** and requires explicit authorization.
+**Selected option:** With VirtualBox now installed on `D:`, **Option 1 (local virtual lab) is the primary path** and requires only the manual firmware SVM/VT change (§4.2) before VMs can be built. **Option 2 (authorized separate Ubuntu machine)** remains a valid alternative that needs no change to this Windows host. **Option 3 (remote lab) is last resort** and requires explicit authorization. Do not create or start any VM until SVM/VT is confirmed enabled (§4.3).
 
 ## 3. Network isolation (mandatory)
 
@@ -84,6 +85,50 @@ Ubuntu MKYBOOT server (static lab IP, e.g. 198.51.100.2)
              lab DHCP range e.g. 198.51.100.10-198.51.100.30
 ```
 
+### 4.2 Enable AMD SVM / virtualization in BIOS/UEFI (manual, operator-only)
+
+**Do this first. VirtualBox cannot start any 64-bit (or any) VM until SVM/VT is enabled in firmware. This phase does NOT change firmware automatically.**
+
+1. Save all work and **restart** the PC.
+2. Enter BIOS/UEFI setup. On this board ("System Product Name", ASUS-family) this is usually **`Del`** or **`F2`** pressed during POST. Other common keys: `F10` (HP), `F12`/`Esc` (Dell), `F2` (Lenovo).
+3. Locate the virtualization setting. On AMD it is labeled **`SVM Mode`** (ASUS, under *Advanced → CPU Configuration*) or **`AMD-V` / `Secure Virtual Machine (SVM)`** (Award/Phoenix). Set it to **Enabled**.
+4. If present, leave **IOMMU** at its default — it is not required for this lab but harmless.
+5. **Save & Exit** (usually `F10`). The PC reboots into Windows normally. Do **not** change boot order, secure boot, or any other setting for this lab.
+
+> If you cannot find the setting, consult the motherboard manual. Do not flash firmware or change unrelated options.
+
+### 4.3 Verify virtualization readiness (read-only, after reboot)
+
+Run in an **elevated** PowerShell. SVM is ready only when `VirtualizationFirmwareEnabled` returns **True**:
+
+```powershell
+# 1. Firmware virtualization (must be True before creating any VM)
+(Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled   # -> True
+
+# 2. VirtualBox present and reports its version
+& "D:\Program Files\Oracle\VirtualBox\VBoxManage.exe" --version  # -> 7.2.20r175154
+
+# 3. Default machine folder points to D:
+& "D:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list systemproperties |
+    Select-String "Default machine folder"                        # -> D:\MKYBOOT-Lab\VMs
+
+# 4. Lab folders exist
+"D:\MKYBOOT-Lab","D:\MKYBOOT-Lab\VMs","D:\MKYBOOT-Lab\ISO","D:\MKYBOOT-Lab\Files" |
+    ForEach-Object { "$_ : $(Test-Path $_)" }                     # -> all True
+
+# 5. Free space on C: and D:
+Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+    Select-Object DeviceID, @{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,1)}}
+```
+
+If step 1 is still `False`, the BIOS change did not take — re-enter firmware and confirm **SVM Mode = Enabled**. Do not proceed to build VMs.
+
+### 4.4 Create the VirtualBox Internal Network `mkyboot` (isolated, no host uplink)
+
+An **Internal Network** in VirtualBox has **no connection to the host's physical NIC or the production LAN** — this is what keeps lab DHCP away from `30.0.0.0/24`. Attaching a VM NIC to the internal-network name creates the network; both VMs must use the **same** name (`mkyboot`) to reach each other (see §4.5).
+
+**Never** set the DHCP/TFTP/iSCSI server VM's lab NIC to *Bridged* or *NAT* — that would expose those services beyond the lab. Internal Network mode is host-isolated by design, so no host uplink exists to remove.
+
 ## 4. Required lab components
 
 Minimum set (all on the **isolated** lab network only):
@@ -96,10 +141,108 @@ Minimum set (all on the **isolated** lab network only):
 - **ISC DHCP** server (`isc-dhcp-server`) and **TFTP** server (`tftpd-hpa`).
 - Existing MKYBOOT iPXE assets in `/srv/tftp`: `ipxe.kpxe` (BIOS) and `ipxe.efi` (64-bit UEFI). `ipxe32.efi` is optional/not shipped; build it only for a true 32-bit UEFI client. `bg.png` for the iPXE menu.
 - At least **one PXE-capable disposable client**; a **second** client is desirable to prove write-back isolation.
-- Enough disposable storage for the test image plus write-back/cache testing (`D:` has 126 GB free if a local VM is used).
+- Enough disposable storage for the test image plus write-back/cache testing (`D:` has 125.6 GB free; all VM disks live on `D:`).
 - `qemu-img` for image manipulation.
 
 Dependencies are inventoried by the project's own tool: `bash tools/linux/check-deps.sh`. Host facts (OS, kernel, NIC, IP, service state) come from `bash tools/linux/phase4a-host-check.sh`. Reuse these; do not install unrelated packages.
+
+### 4.5 VM specifications (build only after §4.3 confirms SVM = True)
+
+Create VMs with disks under `D:\MKYBOOT-Lab\` using the installed `VBoxManage.exe`.
+
+**Ubuntu Server VM — the MKYBOOT server:**
+
+| Setting | Value |
+|---|---|
+| Name | `mkyboot-server` |
+| OS type | `Ubuntu_64` |
+| CPUs / RAM | 2 vCPU / 4096 MB |
+| Disk | 40 GB VDI (+ a separate vdisk for the ZFS test pool), under `D:\MKYBOOT-Lab\VMs\mkyboot-server\` |
+| Network | Internal Network `mkyboot` (DHCP, TFTP, iSCSI, OpenResty bind here only) |
+| Firmware | Default (BIOS) is fine for the server |
+
+**PXE client VM — disposable, tests PXE boot:**
+
+| Setting | Value |
+|---|---|
+| Name | `mkyboot-client` |
+| OS type | `Ubuntu_64` (or empty — boots entirely from iSCSI) |
+| CPUs / RAM | 2 vCPU / 2048 MB |
+| Disk | none required (network boot); 4 GB only if you want a local fallback |
+| Network | Internal Network `mkyboot`, boot order **network first** |
+| Firmware | Test **BIOS** (`ipxe.kpxe`) and **UEFI** (`ipxe.efi`) as separate runs; `ipxe32.efi` only with a real 32-bit UEFI client |
+
+Example `VBoxManage` (run from an elevated shell; adjust as needed):
+
+```powershell
+$VBM = "D:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
+$VMs = "D:\MKYBOOT-Lab\VMs"
+
+# Server
+& $VBM createvm --name mkyboot-server --ostype Ubuntu_64 --basefolder "$VMs" --register
+& $VBM modifyvm  mkyboot-server --cpus 2 --memory 4096 --nic1 intnet --intnet1 mkyboot
+& $VBM createhd  --filename "$VMs\mkyboot-server\mkyboot-server.vdi" --size 40960 --format VDI
+& $VBM storagectl mkyboot-server --name SATA --add sata
+& $VBM storageattach mkyboot-server --storagectl SATA --port 0 --device 0 --type hdd `
+      --medium "$VMs\mkyboot-server\mkyboot-server.vdi"
+
+# Client (network-first boot)
+& $VBM createvm --name mkyboot-client --ostype Ubuntu_64 --basefolder "$VMs" --register
+& $VBM modifyvm  mkyboot-client --cpus 2 --memory 2048 --nic1 intnet --intnet1 mkyboot `
+      --boot1 net --boot2 none --boot3 none --boot4 none
+# For UEFI testing also run: & $VBM modifyvm mkyboot-client --firmware efi
+```
+
+Install Ubuntu Server from an official ISO in `D:\MKYBOOT-Lab\ISO\` (download from `ubuntu.com`; verify its checksum). Configure the server VM's lab NIC with the static address from `docs/PHASE4A_PXE_TEST_NETWORK.md` (e.g. `198.51.100.2/24`).
+
+### 4.6 Ubuntu installation and MKYBOOT deployment prerequisites (inside the server VM)
+
+After Ubuntu Server is installed on the isolated `mkyboot` network:
+
+1. Confirm the lab NIC has the intended static IP and that **only** that NIC is up (no second NIC on the production LAN).
+2. Install project dependencies per `tools/linux/check-deps.sh`: OpenResty/nginx, `lua5.4`, `luajit`, ZFS (`zfs`/`zpool`), `tgt` (`tgtadm`), `isc-dhcp-server`, `tftpd-hpa`, `qemu-img`, `iscsiadm`, `tftp`.
+3. Create a **disposable, empty** ZFS test pool on a dedicated vdisk (never touch an existing pool).
+4. Run the repository's own `install.sh` into `/srv/mkyboot` and `/srv/tftp`; confirm installed files match the repo commit.
+5. Place MKYBOOT source at the verified commit on the server VM (clone and `git checkout` that commit).
+6. Only then start the MKYBOOT services **bound to the lab NIC**, and proceed to Phase 4D real PXE acceptance per `docs/PHASE4A_PXE_TEST_NETWORK.md`.
+
+Static validation that runs **before** any VM or network service: `bash -n install.sh`, `bash tools/linux/check-pxe-assets.sh`, `nginx -t`, `dhcpd -t -cf <generated-config>`, and the Lua test suites.
+
+### 4.7 VM storage layout (all on `D:` to protect the small `C:` drive)
+
+```text
+D:\Program Files\Oracle\VirtualBox\     (application — installed)
+D:\MKYBOOT-Lab\
+    VMs\                                (VirtualBox default machine folder — set)
+        mkyboot-server\                 (OS disk + ZFS test vdisk)
+        mkyboot-client\                 (may have no disk for pure PXE boot)
+    ISO\                                (Ubuntu Server ISO, live images)
+    Files\                              (logs, install logs, notes, evidence)
+```
+
+Keep the Ubuntu ISO and all virtual disks on `D:`. Do not place VM media on `C:` (only 7.4 GB free).
+
+### 4.8 Cleanup and recovery
+
+**Lab teardown (when finished):**
+
+```powershell
+$VBM = "D:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
+& $VBM controlvm mkyboot-client poweroff -ErrorAction SilentlyContinue
+& $VBM controlvm mkyboot-server poweroff -ErrorAction SilentlyContinue
+& $VBM unregistervm mkyboot-client --delete      # deletes its disks under D:\MKYBOOT-Lab\VMs
+& $VBM unregistervm mkyboot-server --delete
+Remove-Item -Recurse -Force D:\MKYBOOT-Lab\VMs\*, D:\MKYBOOT-Lab\ISO\* -ErrorAction SilentlyContinue
+```
+
+**Recovery / rollback of the VirtualBox install (only if needed, operator-approved):**
+
+- Uninstall via *Settings → Apps → Oracle VirtualBox* (or `msiexec /x` on the installed product). This removes drivers/services cleanly.
+- The `D:\MKYBOOT-Lab\` folders can be deleted once all VMs are gone.
+- The MKYBOOT-SERVER repository was not modified by the install; no repo rollback is required.
+- **Never** run `icacls ... /reset /t` on `D:\`, and never delete `D:\Program Files\Oracle\VirtualBox` while VMs are still registered — unregister/delete VMs first.
+
+**Safety during teardown:** stop **only** lab services on the isolated server VM, confirm no iSCSI clients remain, and remove **only** objects created for this disposable test. Never destroy a production pool, image, target, DHCP config, or route, and never touch the host's `30.0.0.0/24` NIC.
 
 ## 5. Setup steps (run on the isolated Ubuntu host, after the operator authorizes it)
 
