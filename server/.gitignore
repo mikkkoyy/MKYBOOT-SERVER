@@ -1,0 +1,4 @@
+// Build output and generated binaries are not committed to Git.
+/dist/
+*.exe
+*.log
