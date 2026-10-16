@@ -27,6 +27,45 @@ type Config struct {
 	// LogDir is where the structured log file is written. Empty means the
 	// data root.
 	LogDir string `json:"log_dir,omitempty"`
+	// PXE holds the TFTP and DHCP settings for network boot delivery. Both
+	// default to disabled so nothing binds a network port unless an operator
+	// explicitly enables it for an isolated lab.
+	PXE PXEConfig `json:"pxe"`
+}
+
+// PXEConfig groups the network-boot services. Everything is opt-in.
+type PXEConfig struct {
+	TFTP TFTPConfig `json:"tftp"`
+	DHCP DHCPConfig `json:"dhcp"`
+}
+
+// TFTPConfig configures the built-in TFTP server (RFC 1350).
+type TFTPConfig struct {
+	Enabled     bool   `json:"enabled"`
+	BindAddress string `json:"bind_address"` // specific IP required; never 0.0.0.0
+	BindPort    int    `json:"bind_port"`    // default 69
+	Root        string `json:"root"`         // TFTP root directory (files served from here)
+}
+
+// DHCPConfig configures the isolated-network DHCP offer logic. It is
+// deliberately explicit: every field must be set for a safe lab, and the
+// bind address must be a specific unicast IP (never 0.0.0.0), so the server
+// can never answer on a production interface by accident.
+type DHCPConfig struct {
+	Enabled      bool   `json:"enabled"`
+	BindAddress  string `json:"bind_address"` // MUST be a specific lab IP, never 0.0.0.0
+	BindPort     int    `json:"bind_port"`    // default 67
+	Subnet       string `json:"subnet"`       // CIDR, e.g. 198.51.100.0/24
+	RangeStart   string `json:"range_start"`  // first offerable address
+	RangeEnd     string `json:"range_end"`    // last offerable address
+	LeaseSeconds int    `json:"lease_seconds"`
+	Gateway      string `json:"gateway"`
+	DNSServer    string `json:"dns_server"`
+	NextServer   string `json:"next_server"` // TFTP server IP (siaddr / option 66)
+	// BootFileUEFI is served to UEFI clients (must be the 64-bit ipxe.efi).
+	BootFileUEFI string `json:"boot_file_uefi"`
+	// BootFileBIOS is served to legacy BIOS clients (ipxe.kpxe).
+	BootFileBIOS string `json:"boot_file_bios"`
 }
 
 const (

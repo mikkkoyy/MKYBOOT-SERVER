@@ -62,6 +62,10 @@ func (l *Logger) Warn(msg string, fields map[string]any) { l.log("warn", msg, fi
 // Error logs at error level.
 func (l *Logger) Error(msg string, fields map[string]any) { l.log("error", msg, fields) }
 
+// Debug logs at debug level (dropped in production logs is a caller choice;
+// this simply labels the level).
+func (l *Logger) Debug(msg string, fields map[string]any) { l.log("debug", msg, fields) }
+
 // Close releases the underlying file, if any.
 func (l *Logger) Close() error {
 	if l == nil || l.closer == nil {
@@ -69,3 +73,7 @@ func (l *Logger) Close() error {
 	}
 	return l.closer.Close()
 }
+
+// discardLogger returns a logger that writes to io.Discard. It is used for
+// validation-only paths (e.g. -dry-run) where no log file should be opened.
+func discardLogger() *Logger { return NewLogger(io.Discard) }

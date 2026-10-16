@@ -56,6 +56,8 @@ func NewServer(cfg Config, log *Logger) (*Server, string, error) {
 	mux.HandleFunc("/api/clients/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("/api/client/", s.handleClientItem) // /api/client/{id}/...
 	mux.HandleFunc("/api/session/", s.handleSession)   // /api/session/{id}
+	mux.HandleFunc("/api/bootstate", s.handleBootState)
+	mux.HandleFunc("/api/bootscript", s.handleBootScript)
 	mux.HandleFunc("/", s.handleRoot)
 
 	s.http = &http.Server{

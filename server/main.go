@@ -27,6 +27,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -42,9 +43,21 @@ func run(args []string) int {
 		install    = fs.Bool("install", false, "install the Windows service and exit")
 		uninstall  = fs.Bool("uninstall", false, "remove the Windows service and exit")
 		configPath = fs.String("config", DefaultConfigPath(), "path to config.json")
+		dryRun     = fs.Bool("dry-run", false, "validate PXE (TFTP/DHCP) configuration and exit without binding")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	// Dry-run: validate the configured PXE services without opening sockets.
+	// This is the safe path for checking lab configuration before activation.
+	if *dryRun {
+		cfg, err := LoadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return runDryRun(cfg)
 	}
 
 	switch {
@@ -111,6 +124,21 @@ func run(args []string) int {
 
 	logger.Info("starting mkyboot-server", map[string]any{"addr": srv.Addr(), "version": serverVersion})
 
+	// Start enabled PXE services (TFTP/DHCP). A bind failure aborts startup so
+	// a port conflict is surfaced loudly rather than silently ignored. This is
+	// intentionally gated on config; with defaults both are disabled.
+	pxeStops, pxeErr := startPXE(cfg, logger)
+	if pxeErr != nil {
+		logger.Error("pxe service start failed", map[string]any{"error": pxeErr.Error()})
+		fmt.Fprintf(os.Stderr, "error: PXE service failed to start: %v\n", pxeErr)
+		return 1
+	}
+	defer func() {
+		for i := len(pxeStops) - 1; i >= 0; i-- {
+			pxeStops[i]()
+		}
+	}()
+
 	runFn := func(ctx context.Context) error {
 		return srv.Serve(ctx)
 	}
@@ -140,4 +168,82 @@ func exitCodeFromService(err error) int {
 		return 1
 	}
 	return 0
+}
+
+// runDryRun validates the configured PXE services without binding any socket,
+// printing a summary. It returns 0 when everything is valid (or disabled).
+func runDryRun(cfg Config) int {
+	fmt.Println("MKYBOOT Phase 3 PXE dry-run (no sockets will be opened)")
+	ok := true
+	if cfg.PXE.TFTP.Enabled {
+		if err := cfg.PXE.TFTP.Validate(); err != nil {
+			fmt.Printf("  TFTP:  INVALID - %v\n", err)
+			ok = false
+		} else {
+			srv, err := NewTFTPServer(cfg.PXE.TFTP.Root, discardLogger())
+			if err != nil {
+				fmt.Printf("  TFTP:  INVALID - %v\n", err)
+				ok = false
+			} else {
+				fmt.Printf("  TFTP:  OK bind=%s root=%s\n", net.JoinHostPort(cfg.PXE.TFTP.BindAddress, fmt.Sprint(cfg.PXE.TFTP.BindPort)), srv.root)
+			}
+		}
+	} else {
+		fmt.Println("  TFTP:  disabled")
+	}
+	if cfg.PXE.DHCP.Enabled {
+		ds, err := NewDHCPServer(cfg.PXE.DHCP, discardLogger())
+		if err != nil {
+			fmt.Printf("  DHCP:  INVALID - %v\n", err)
+			ok = false
+		} else {
+			fmt.Println("  DHCP:  " + ds.dryRun())
+		}
+	} else {
+		fmt.Println("  DHCP:  disabled")
+	}
+	if !ok {
+		fmt.Println("dry-run FAILED: fix the configuration above before enabling PXE services")
+		return 1
+	}
+	fmt.Println("dry-run OK")
+	return 0
+}
+
+// startPXE starts the enabled TFTP and DHCP services alongside the HTTP
+// server. Returns stop functions; on any bind failure it stops already-started
+// services and returns an error so the caller aborts.
+func startPXE(cfg Config, log *Logger) (stops []func(), err error) {
+	stopAll := func() {
+		for i := len(stops) - 1; i >= 0; i-- {
+			stops[i]()
+		}
+	}
+	if cfg.PXE.TFTP.Enabled {
+		if err := cfg.PXE.TFTP.Validate(); err != nil {
+			return nil, fmt.Errorf("tftp config: %w", err)
+		}
+		addr := net.JoinHostPort(cfg.PXE.TFTP.BindAddress, fmt.Sprint(cfg.PXE.TFTP.BindPort))
+		stop, err := RunTFTP(addr, cfg.PXE.TFTP.Root, log, nil)
+		if err != nil {
+			stopAll()
+			return nil, err
+		}
+		stops = append(stops, stop)
+	}
+	if cfg.PXE.DHCP.Enabled {
+		ds, err := NewDHCPServer(cfg.PXE.DHCP, log)
+		if err != nil {
+			stopAll()
+			return nil, fmt.Errorf("dhcp config: %w", err)
+		}
+		if err := ds.Listen(); err != nil {
+			stopAll()
+			return nil, err
+		}
+		go ds.Serve()
+		log.Info("dhcp listening", map[string]any{"addr": ds.Addr(), "subnet": cfg.PXE.DHCP.Subnet})
+		stops = append(stops, ds.Close)
+	}
+	return stops, nil
 }
