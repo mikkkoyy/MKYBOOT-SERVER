@@ -39,10 +39,25 @@ type Config struct {
 // StorageConfig configures the image storage subsystem. The root directory
 // contains base images and per-client overlay reserves. The VHDX backend is
 // auto-detected at startup (DiskPart on Windows); capabilities are reported
-// via /api/storage/health.
+// via /api/storage/health. The iSCSI target backend targets a separate Linux
+// VM running LIO/targetcli; it is not available on Windows 10 Home and its
+// capability flag remains false until verified via loopback connection.
 type StorageConfig struct {
 	Enabled bool   `json:"enabled"` // whether the storage subsystem is active
 	Root    string `json:"root"`    // image storage root; defaults to <data-root>/images
+	// ISCSI configures remote iSCSI target management. The target itself runs
+	// on a separate Linux VM; this host only sends management commands.
+	ISCSI ISCSIConfig `json:"iscsi"`
+}
+
+// ISCSIConfig configures management of a remote iSCSI target (Linux VM).
+// All fields are optional; when unset, the iSCSI backend is unavailable.
+type ISCSIConfig struct {
+	Enabled bool   `json:"enabled"`  // whether iSCSI target management is enabled
+	Host    string `json:"host"`     // Linux VM hostname or IP
+	Port    int    `json:"port"`     // SSH port (default 22)
+	User    string `json:"user"`     // SSH username
+	KeyPath string `json:"key_path"` // path to SSH private key (secret, never logged)
 }
 
 // PXEConfig groups the network-boot services. Everything is opt-in.

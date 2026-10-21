@@ -71,10 +71,18 @@ func NewServer(cfg Config, log *Logger) (*Server, string, error) {
 	mux.HandleFunc("/api/bootstate", s.handleBootState)
 	mux.HandleFunc("/api/bootscript", s.handleBootScript)
 	mux.HandleFunc("/api/storage/health", s.handleStorageHealth)
-	mux.HandleFunc("/api/storage/images", s.handleStorageImages)  // GET list, POST create
-	mux.HandleFunc("/api/storage/images/", s.handleStorageImages) // GET {id}, DELETE {id}, GET {id}/inspect
-	mux.HandleFunc("/api/storage/assign", s.handleStorageAssign)  // POST assign
-	mux.HandleFunc("/api/storage/assign/", s.handleStorageAssign) // DELETE /api/storage/assign/{clientID}
+	mux.HandleFunc("/api/storage/images", s.handleStorageImages)            // GET list, POST create
+	mux.HandleFunc("/api/storage/images/", s.handleStorageImages)           // GET {id}, DELETE {id}, GET {id}/inspect
+	mux.HandleFunc("/api/storage/assign", s.handleStorageAssign)            // POST assign
+	mux.HandleFunc("/api/storage/assign/", s.handleStorageAssign)           // DELETE /api/storage/assign/{clientID}
+	mux.HandleFunc("/api/storage/iscsi/health", s.handleISCSIHealth)        // GET iSCSI backend state
+	mux.HandleFunc("/api/storage/iscsi/targets", s.handleISCSIListTargets)  // GET list targets
+	mux.HandleFunc("/api/storage/iscsi/luns", s.handleISCSCreateLUN)        // POST create LUN
+	mux.HandleFunc("/api/storage/iscsi/luns/", s.handleISCSCreateLUNDelete) // DELETE remove LUN
+	mux.HandleFunc("/api/storage/iscsi/export", s.handleISCSIExport)        // POST export LUN as target
+	mux.HandleFunc("/api/storage/iscsi/export/", s.handleISCSIUnexport)     // DELETE unexport target
+	mux.HandleFunc("/api/storage/iscsi/acl", s.handleISCSISetACL)           // POST set initiator ACL
+	mux.HandleFunc("/api/storage/iscsi/verify", s.handleISCSIVerify)        // POST verify target connection
 	mux.HandleFunc("/", s.handleRoot)
 
 	s.http = &http.Server{

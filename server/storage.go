@@ -96,6 +96,9 @@ type StorageHealth struct {
 	Message     string `json:"message,omitempty"`
 	Images      int    `json:"images"`
 	Assignments int    `json:"assignments"`
+	// ISCSIState reports whether the iSCSI target backend is available,
+	// configured, or verified via a loopback connection.
+	ISCSIState string `json:"iscsi_state,omitempty"`
 }
 
 // sentinel errors for storage operations.
@@ -108,13 +111,15 @@ var (
 // Storage manages base images and per-client writable overlays. All image
 // paths are strictly contained under root to prevent path traversal.
 type Storage struct {
-	mu          sync.Mutex
-	root        string
-	cap         StorageCapabilities
-	backend     VHDXBackend
-	images      map[string]*BaseImage
-	assignments map[string]*ClientAssignment
-	log         *Logger
+	mu           sync.Mutex
+	root         string
+	cap          StorageCapabilities
+	backend      VHDXBackend
+	iscsiBackend iSCSITargetBackend
+	iscsiState   iSCSIHealthState
+	images       map[string]*BaseImage
+	assignments  map[string]*ClientAssignment
+	log          *Logger
 }
 
 // NewStorage creates a storage backend rooted at root. The root is created
@@ -132,31 +137,41 @@ func NewStorage(root string, log *Logger) (*Storage, error) {
 		return nil, fmt.Errorf("storage root %q: %w", abs, err)
 	}
 
-	backend, err := DetectBackend()
+	iscsiBackend, err := DetectiSCSIBackend()
 	if err != nil {
-		// No backend is not a fatal error: storage still works for metadata
-		// operations, but VHDX create/remove/inspect are unavailable.
-		backend = nil
+		iscsiBackend = nil
+	}
+
+	vhdxBackend, err := DetectBackend()
+	if err != nil {
+		vhdxBackend = nil
 	}
 
 	s := &Storage{
-		root:        abs,
-		images:      map[string]*BaseImage{},
-		assignments: map[string]*ClientAssignment{},
-		log:         log,
-		backend:     backend,
+		root:         abs,
+		images:       map[string]*BaseImage{},
+		assignments:  map[string]*ClientAssignment{},
+		log:          log,
+		backend:      vhdxBackend,
+		iscsiBackend: iscsiBackend,
+		iscsiState:   iSCSIStateUnavailable,
 	}
 
 	s.cap = StorageCapabilities{
-		VHDX:           backend != nil && backend.IsAvailable(),
-		Differencing:   backend != nil && backend.IsAvailable(),
+		VHDX:           vhdxBackend != nil && vhdxBackend.IsAvailable(),
+		Differencing:   vhdxBackend != nil && vhdxBackend.IsAvailable(),
 		BlockIsolation: false,
 		ISCSI:          false,
 	}
-	if backend != nil {
-		s.log.Info("storage backend detected", map[string]any{"backend": backend.Name(), "available": backend.IsAvailable()})
+	if vhdxBackend != nil {
+		s.log.Info("storage backend detected", map[string]any{"backend": vhdxBackend.Name(), "available": vhdxBackend.IsAvailable()})
 	} else {
 		s.log.Info("no VHDX backend available", map[string]any{"vhdx": false, "differencing": false})
+	}
+	if iscsiBackend != nil {
+		s.log.Info("iSCSI target backend detected", map[string]any{"backend": iscsiBackend.Name(), "available": iscsiBackend.IsAvailable()})
+	} else {
+		s.log.Info("no iSCSI target backend available", map[string]any{"iscsi": false})
 	}
 	return s, nil
 }

@@ -24,11 +24,12 @@ const (
 
 // sentinel errors for VHDX image operations.
 var (
-	errImageIDInvalid     = errors.New("invalid image id")
-	errImageAlreadyExists = errors.New("image already exists")
-	errImageInUse         = errors.New("image is in use by one or more client assignments")
-	errImageAttached      = errors.New("image is currently attached")
-	errBackendRequired    = errors.New("VHDX backend not available")
+	errImageIDInvalid       = errors.New("invalid image id")
+	errImageAlreadyExists   = errors.New("image already exists")
+	errImageInUse           = errors.New("image is in use by one or more client assignments")
+	errImageAttached        = errors.New("image is currently attached")
+	errBackendRequired      = errors.New("VHDX backend not available")
+	errISCISBackendRequired = errors.New("iSCSI target backend not available")
 )
 
 // Backend returns the storage's VHDX backend, or nil if none is available.
@@ -53,6 +54,44 @@ func (s *Storage) BackendAvailable() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.backend != nil && s.backend.IsAvailable()
+}
+
+// iSCSIBackend returns the storage's iSCSI target backend, or nil if none is available.
+func (s *Storage) iSCSIBackend() iSCSITargetBackend {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.iscsiBackend
+}
+
+// iSCSIBackendName returns the iSCSI backend name, or "none" if no backend is available.
+func (s *Storage) iSCSIBackendName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iscsiBackend == nil {
+		return "none"
+	}
+	return s.iscsiBackend.Name()
+}
+
+// iSCSIBackendAvailable reports whether an iSCSI target backend is available.
+func (s *Storage) iSCSIBackendAvailable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.iscsiBackend != nil && s.iscsiBackend.IsAvailable()
+}
+
+// iSCSIState returns the current iSCSI health state.
+func (s *Storage) iSCSIState() iSCSIHealthState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.iscsiState
+}
+
+// setISCSIState updates the iSCSI health state. Caller must not hold s.mu.
+func (s *Storage) setISCSIState(state iSCSIHealthState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.iscsiState = state
 }
 
 // validateImageID checks that an image ID is safe and well-formed.

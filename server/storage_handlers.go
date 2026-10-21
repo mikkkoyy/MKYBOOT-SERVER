@@ -21,6 +21,7 @@ func (s *Server) handleStorageHealth(w http.ResponseWriter, r *http.Request) {
 		OK:          true,
 		Images:      len(s.storage.ListImages()),
 		Assignments: len(s.storage.ListAssignments()),
+		ISCSIState:  s.storage.iSCSIState().String(),
 	}
 	var missing []string
 	if !cap.VHDX {
@@ -301,4 +302,271 @@ func (s *Server) handleStorageAssign(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleISCSIHealth serves GET /api/storage/iscsi/health (admin only).
+// Reports whether an iSCSI target backend is available and its verification state.
+func (s *Server) handleISCSIHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	state := s.storage.iSCSIState()
+	info := map[string]any{
+		"backend":   s.storage.iSCSIBackendName(),
+		"available": s.storage.iSCSIBackendAvailable(),
+		"state":     state.String(),
+		"iscsi":     false, // capability flag remains false until verified
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend != nil && backend.IsAvailable() {
+		targets, err := backend.ListTargets()
+		if err != nil {
+			info["error"] = err.Error()
+		} else {
+			info["targets"] = targets
+		}
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// handleISCSIListTargets serves GET /api/storage/iscsi/targets (admin only).
+// Lists currently exported iSCSI targets.
+func (s *Server) handleISCSIListTargets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	targets, err := backend.ListTargets()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"targets": targets, "count": len(targets)})
+}
+
+// handleISCSCreateLUN serves POST /api/storage/iscsi/luns (admin only).
+// Creates a new block-backed LUN file. Body: {"path": "...", "size_mb": 1024}
+func (s *Server) handleISCSCreateLUN(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	var req struct {
+		Path   string `json:"path"`
+		SizeMB int64  `json:"size_mb"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if req.SizeMB < 1 {
+		writeError(w, http.StatusBadRequest, "size_mb must be positive")
+		return
+	}
+	if err := backend.CreateLUN(req.Path, req.SizeMB); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"path": req.Path, "size_mb": req.SizeMB, "created": true})
+}
+
+// handleISCSCreateLUNDelete serves DELETE /api/storage/iscsi/luns/ (admin only).
+// Removes a LUN file. Body: {"path": "..."}
+func (s *Server) handleISCSCreateLUNDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := backend.RemoveLUN(req.Path); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": req.Path, "removed": true})
+}
+
+// handleISCSIExport serves POST /api/storage/iscsi/export (admin only).
+// Exports a LUN as an iSCSI target. Body: {"iqn": "...", "path": "...", "size_mb": 1024, "chap_user": "...", "chap_secret": "..."}
+// CHAP secret is never logged.
+func (s *Server) handleISCSIExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	var req struct {
+		IQN        string `json:"iqn"`
+		Path       string `json:"path"`
+		SizeMB     int64  `json:"size_mb"`
+		CHAPUser   string `json:"chap_user,omitempty"`
+		CHAPSecret string `json:"chap_secret,omitempty"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateIQN(req.IQN); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := backend.ExportLUN(req.IQN, req.Path, req.SizeMB, req.CHAPUser, req.CHAPSecret); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"iqn": req.IQN, "path": req.Path, "exported": true})
+}
+
+// handleISCSIUnexport serves DELETE /api/storage/iscsi/export/ (admin only).
+// Unexports an iSCSI target. Body: {"iqn": "..."}
+func (s *Server) handleISCSIUnexport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	var req struct {
+		IQN string `json:"iqn"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateIQN(req.IQN); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := backend.UnexportLUN(req.IQN); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"iqn": req.IQN, "unexported": true})
+}
+
+// handleISCSISetACL serves POST /api/storage/iscsi/acl (admin only).
+// Sets initiator ACL for a target. Body: {"iqn": "...", "initiators": ["iqn:..."]}
+func (s *Server) handleISCSISetACL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	var req struct {
+		IQN        string   `json:"iqn"`
+		Initiators []string `json:"initiators"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateIQN(req.IQN); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := backend.SetACL(req.IQN, req.Initiators); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"iqn": req.IQN, "acl_updated": true})
+}
+
+// handleISCSIVerify serves POST /api/storage/iscsi/verify (admin only).
+// Attempts a loopback connection to verify the target is functional.
+// Body: {"iqn": "..."}
+func (s *Server) handleISCSIVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	backend := s.storage.iSCSIBackend()
+	if backend == nil || !backend.IsAvailable() {
+		writeError(w, http.StatusServiceUnavailable, ErriSCSIBackendUnavailable.Error())
+		return
+	}
+	var req struct {
+		IQN string `json:"iqn"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateIQN(req.IQN); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := backend.VerifyConnection(req.IQN); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("verification failed: %v", err))
+		return
+	}
+	s.storage.setISCSIState(iSCSIStateVerified)
+	writeJSON(w, http.StatusOK, map[string]any{"iqn": req.IQN, "verified": true})
 }
