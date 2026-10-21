@@ -8,12 +8,11 @@ import (
 	"time"
 )
 
-// AssignClient binds clientID to base imageID, reserving a writable overlay
-// path under the storage root. Duplicate assignments for the same client are
-// rejected. The base image must exist and be read-only. The overlay path is
-// validated to be contained within root (path traversal protection). The
-// differencing disk file is not created yet; Differencing capability is
-// false until a backing implementation is wired in.
+// AssignClient binds clientID to base imageID and creates a writable
+// differencing disk overlay for the client. The differencing disk is created
+// via the storage backend with the base image as its parent. Duplicate
+// assignments for the same client are rejected. If no backend is available
+// or differencing is not supported, an error is returned.
 func (s *Storage) AssignClient(clientID, imageID string) (*ClientAssignment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -37,12 +36,21 @@ func (s *Storage) AssignClient(clientID, imageID string) (*ClientAssignment, err
 		return nil, fmt.Errorf("%w: %q", errClientAssigned, clientID)
 	}
 
+	if s.backend == nil || !s.backend.IsAvailable() {
+		return nil, fmt.Errorf("%w: cannot create differencing overlay for client %q", errBackendRequired, clientID)
+	}
+
 	// Reserve the overlay path under root/overlays/<clientID>.avhdx. The
 	// path is derived entirely from server-controlled inputs, so it cannot
 	// be used for path traversal; we validate containment for defense in depth.
 	overlayPath := filepath.Join(s.root, "overlays", clientID+".avhdx")
 	if !s.isContained(overlayPath) {
 		return nil, fmt.Errorf("computed overlay path %q escapes storage root", overlayPath)
+	}
+
+	// Create the differencing disk with the base image as its parent.
+	if err := s.backend.CreateDifferencing(overlayPath, img.Path); err != nil {
+		return nil, fmt.Errorf("create differencing overlay for client %q: %w", clientID, err)
 	}
 
 	a := &ClientAssignment{
@@ -57,14 +65,35 @@ func (s *Storage) AssignClient(clientID, imageID string) (*ClientAssignment, err
 	return a, nil
 }
 
-// ReleaseAssignment removes the assignment for clientId, if any.
+// ReleaseAssignment removes the assignment for clientID, if any. The
+// differencing disk is detached (if attached) and deleted. The operation is
+// rejected if the overlay is currently attached and cannot be detached.
 func (s *Storage) ReleaseAssignment(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.assignments[clientID]; !exists {
+	a, exists := s.assignments[clientID]
+	if !exists {
 		return fmt.Errorf("%w: %q", errClientNotAssigned, clientID)
 	}
+
+	// If the overlay is attached, detach it first.
+	if s.backend != nil && s.backend.IsAvailable() {
+		attached, err := s.isAttached(a.OverlayPath)
+		if err != nil {
+			return fmt.Errorf("check attachment for client %q: %w", clientID, err)
+		}
+		if attached {
+			if err := s.backend.Detach(a.OverlayPath); err != nil {
+				return fmt.Errorf("detach overlay for client %q: %w", clientID, err)
+			}
+		}
+		// Remove the differencing disk file.
+		if err := s.backend.Remove(a.OverlayPath); err != nil {
+			return fmt.Errorf("remove overlay for client %q: %w", clientID, err)
+		}
+	}
+
 	delete(s.assignments, clientID)
 	s.log.Info("client image released", map[string]any{"client": clientID})
 	return nil

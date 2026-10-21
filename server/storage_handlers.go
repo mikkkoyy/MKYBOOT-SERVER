@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -18,46 +19,196 @@ func (s *Server) handleStorageHealth(w http.ResponseWriter, r *http.Request) {
 	cap := s.storage.Capabilities()
 	health := StorageHealth{
 		OK:          true,
-		Message:     "storage subsystem online",
 		Images:      len(s.storage.ListImages()),
 		Assignments: len(s.storage.ListAssignments()),
 	}
-	if !cap.VHDX || !cap.Differencing || !cap.BlockIsolation || !cap.ISCSI {
-		health.Message = "storage subsystem online; VHDX/differencing/block-isolation/iSCSI not yet implemented"
+	var missing []string
+	if !cap.VHDX {
+		missing = append(missing, "vhdx")
+	}
+	if !cap.Differencing {
+		missing = append(missing, "differencing")
+	}
+	if !cap.BlockIsolation {
+		missing = append(missing, "block-isolation")
+	}
+	if !cap.ISCSI {
+		missing = append(missing, "iscsi")
+	}
+	if len(missing) > 0 {
+		health.Message = "storage subsystem online; capabilities disabled: " + strings.Join(missing, ", ")
+	} else {
+		health.Message = "storage subsystem online"
 	}
 	writeJSON(w, http.StatusOK, health)
 }
 
-// handleStorageImages serves GET /api/storage/images (list) and
-// GET /api/storage/images/{id} (single). Admin only.
+// handleStorageImages serves:
+//
+//	GET    /api/storage/images          list images
+//	POST   /api/storage/images          create a new image
+//	GET    /api/storage/images/{id}     get a single image
+//	DELETE /api/storage/images/{id}     remove an image
+//	GET    /api/storage/images/{id}/inspect  inspect image metadata
+//
+// Admin only.
 func (s *Server) handleStorageImages(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	if !s.requireAdmin(w, r) {
 		return
 	}
 	path := r.URL.Path
 	switch {
 	case path == "/api/storage/images":
-		imgs := s.storage.ListImages()
-		writeJSON(w, http.StatusOK, map[string]any{"images": imgs, "count": len(imgs)})
+		switch r.Method {
+		case http.MethodGet:
+			imgs := s.storage.ListImages()
+			writeJSON(w, http.StatusOK, map[string]any{"images": imgs, "count": len(imgs)})
+		case http.MethodPost:
+			s.handleStorageImageCreate(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
 	case strings.HasPrefix(path, "/api/storage/images/"):
-		id := strings.TrimPrefix(path, "/api/storage/images/")
-		if id == "" || strings.Contains(id, "/") {
+		rest := strings.TrimPrefix(path, "/api/storage/images/")
+		if rest == "" || strings.Contains(rest, "//") {
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
-		img, ok := s.storage.GetImage(id)
-		if !ok {
-			writeError(w, http.StatusNotFound, "image not found")
-			return
+		parts := strings.Split(rest, "/")
+		switch len(parts) {
+		case 1:
+			id := parts[0]
+			if id == "" {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				img, ok := s.storage.GetImage(id)
+				if !ok {
+					writeError(w, http.StatusNotFound, "image not found")
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"image": img})
+			case http.MethodDelete:
+				if err := s.storage.RemoveImage(id); err != nil {
+					if errors.Is(err, errImageNotFound) {
+						writeError(w, http.StatusNotFound, err.Error())
+						return
+					}
+					if errors.Is(err, errImageInUse) || errors.Is(err, errImageAttached) {
+						writeError(w, http.StatusConflict, err.Error())
+						return
+					}
+					if errors.Is(err, errBackendRequired) {
+						writeError(w, http.StatusServiceUnavailable, err.Error())
+						return
+					}
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"id": id, "removed": true})
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		case 2:
+			id, sub := parts[0], parts[1]
+			if id == "" || sub == "" {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			if r.Method != http.MethodGet || sub != "inspect" {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			img, vinfo, err := s.storage.InspectImage(id)
+			if err != nil {
+				if errors.Is(err, errImageNotFound) {
+					writeError(w, http.StatusNotFound, err.Error())
+					return
+				}
+				if errors.Is(err, errBackendRequired) {
+					writeError(w, http.StatusServiceUnavailable, err.Error())
+					return
+				}
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"image": img, "inspect": vinfo})
+		default:
+			writeError(w, http.StatusNotFound, "not found")
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"image": img})
+		return
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// handleStorageImageCreate creates a new VHDX base image.
+// POST /api/storage/images with body:
+//
+//	{"id": "win10", "name": "Windows 10 Base", "path": "images/win10.vhdx", "format": "vhdx", "size_mb": 40960}
+func (s *Server) handleStorageImageCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		Format   string `json:"format"`
+		SizeMB   int64  `json:"size_mb"`
+		ParentID string `json:"parent_id,omitempty"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var format ImageFormat
+	switch strings.ToLower(req.Format) {
+	case "vhdx":
+		format = ImageFormatVHDX
+	case "vhd":
+		format = ImageFormatVHD
+	case "raw":
+		format = ImageFormatRAW
+	default:
+		writeError(w, http.StatusBadRequest, "format must be vhdx, vhd, or raw")
+		return
+	}
+
+	if (req.SizeMB < minImageSizeMB || req.SizeMB > maxImageSizeMB) && req.ParentID == "" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("size_mb must be between %d and %d", minImageSizeMB, maxImageSizeMB))
+		return
+	}
+
+	var parentPath string
+	if req.ParentID != "" {
+		parentImg, ok := s.storage.GetImage(req.ParentID)
+		if !ok {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("parent image %q not found", req.ParentID))
+			return
+		}
+		parentPath = parentImg.Path
+	}
+
+	img, err := s.storage.CreateImage(req.ID, req.Name, req.Path, format, req.SizeMB, parentPath)
+	if err != nil {
+		if errors.Is(err, errImageAlreadyExists) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, errBackendRequired) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"image": img})
 }
 
 // handleStorageAssign serves POST /api/storage/assign (assign) and

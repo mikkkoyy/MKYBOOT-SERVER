@@ -71,8 +71,8 @@ func NewServer(cfg Config, log *Logger) (*Server, string, error) {
 	mux.HandleFunc("/api/bootstate", s.handleBootState)
 	mux.HandleFunc("/api/bootscript", s.handleBootScript)
 	mux.HandleFunc("/api/storage/health", s.handleStorageHealth)
-	mux.HandleFunc("/api/storage/images", s.handleStorageImages)  // GET list
-	mux.HandleFunc("/api/storage/images/", s.handleStorageImages) // GET /api/storage/images/{id}
+	mux.HandleFunc("/api/storage/images", s.handleStorageImages)  // GET list, POST create
+	mux.HandleFunc("/api/storage/images/", s.handleStorageImages) // GET {id}, DELETE {id}, GET {id}/inspect
 	mux.HandleFunc("/api/storage/assign", s.handleStorageAssign)  // POST assign
 	mux.HandleFunc("/api/storage/assign/", s.handleStorageAssign) // DELETE /api/storage/assign/{clientID}
 	mux.HandleFunc("/", s.handleRoot)

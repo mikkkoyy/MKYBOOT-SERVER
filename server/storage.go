@@ -111,14 +111,15 @@ type Storage struct {
 	mu          sync.Mutex
 	root        string
 	cap         StorageCapabilities
+	backend     VHDXBackend
 	images      map[string]*BaseImage
 	assignments map[string]*ClientAssignment
 	log         *Logger
 }
 
 // NewStorage creates a storage backend rooted at root. The root is created
-// with restrictive permissions if missing. Capabilities are all false until
-// a backing implementation is wired in.
+// with restrictive permissions if missing. The VHDX backend is auto-detected;
+// capabilities are set according to what the backend actually supports.
 func NewStorage(root string, log *Logger) (*Storage, error) {
 	if log == nil {
 		log = NewLogger(io.Discard)
@@ -130,17 +131,32 @@ func NewStorage(root string, log *Logger) (*Storage, error) {
 	if err := ensureDir(abs); err != nil {
 		return nil, fmt.Errorf("storage root %q: %w", abs, err)
 	}
+
+	backend, err := DetectBackend()
+	if err != nil {
+		// No backend is not a fatal error: storage still works for metadata
+		// operations, but VHDX create/remove/inspect are unavailable.
+		backend = nil
+	}
+
 	s := &Storage{
 		root:        abs,
 		images:      map[string]*BaseImage{},
 		assignments: map[string]*ClientAssignment{},
 		log:         log,
+		backend:     backend,
 	}
+
 	s.cap = StorageCapabilities{
-		VHDX:           false,
-		Differencing:   false,
+		VHDX:           backend != nil && backend.IsAvailable(),
+		Differencing:   backend != nil && backend.IsAvailable(),
 		BlockIsolation: false,
 		ISCSI:          false,
+	}
+	if backend != nil {
+		s.log.Info("storage backend detected", map[string]any{"backend": backend.Name(), "available": backend.IsAvailable()})
+	} else {
+		s.log.Info("no VHDX backend available", map[string]any{"vhdx": false, "differencing": false})
 	}
 	return s, nil
 }

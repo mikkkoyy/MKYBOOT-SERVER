@@ -37,7 +37,9 @@ type Config struct {
 }
 
 // StorageConfig configures the image storage subsystem. The root directory
-// contains base images and per-client overlay reserves.
+// contains base images and per-client overlay reserves. The VHDX backend is
+// auto-detected at startup (DiskPart on Windows); capabilities are reported
+// via /api/storage/health.
 type StorageConfig struct {
 	Enabled bool   `json:"enabled"` // whether the storage subsystem is active
 	Root    string `json:"root"`    // image storage root; defaults to <data-root>/images

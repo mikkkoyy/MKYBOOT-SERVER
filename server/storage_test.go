@@ -18,6 +18,13 @@ func newTestStorage(t *testing.T) (*Storage, string) {
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
+	// Tests use a fake backend so AssignClient does not invoke real DiskPart.
+	fake := newFakeBackend()
+	st.mu.Lock()
+	st.backend = fake
+	st.cap.VHDX = fake.IsAvailable()
+	st.cap.Differencing = fake.IsAvailable()
+	st.mu.Unlock()
 	return st, root
 }
 
@@ -33,17 +40,14 @@ func makeTestImage(t *testing.T, dir, name, ext string) string {
 func TestStorageCapabilitiesAllFalse(t *testing.T) {
 	st, _ := newTestStorage(t)
 	cap := st.Capabilities()
-	if cap.VHDX {
-		t.Error("VHDX capability should be false until implemented")
-	}
-	if cap.Differencing {
-		t.Error("Differencing capability should be false until implemented")
-	}
+	// Capabilities depend on the detected backend. On Windows with DiskPart
+	// available, VHDX and Differencing are true; block isolation and iSCSI
+	// remain false. Without a backend, all are false.
 	if cap.BlockIsolation {
-		t.Error("BlockIsolation capability should be false until implemented")
+		t.Error("BlockIsolation capability should be false")
 	}
 	if cap.ISCSI {
-		t.Error("ISCSI capability should be false until implemented")
+		t.Error("ISCSI capability should be false")
 	}
 }
 
@@ -316,6 +320,13 @@ func newTestStorageServer(t *testing.T) (*Server, string) {
 	if adminTok == "" {
 		t.Fatal("expected a generated admin token on first run")
 	}
+	// Override auto-detected backend with fake for tests.
+	fake := newFakeBackend()
+	srv.storage.mu.Lock()
+	srv.storage.backend = fake
+	srv.storage.cap.VHDX = fake.IsAvailable()
+	srv.storage.cap.Differencing = fake.IsAvailable()
+	srv.storage.mu.Unlock()
 	// Register a base image in the storage root.
 	imgPath := makeTestImage(t, filepath.Join(dir, "images"), "base", ".vhdx")
 	if _, err := srv.storage.RegisterExisting("base-img", "Base Image", imgPath); err != nil {
@@ -407,8 +418,12 @@ func TestStorageImagesGetEndpoint(t *testing.T) {
 
 func TestStorageImagesMethodNotAllowed(t *testing.T) {
 	srv, adminTok := newTestStorageServer(t)
-	if rec := do(t, srv, http.MethodPost, "/api/storage/images", adminTok, ""); rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("POST images = %d, want 405", rec.Code)
+	// POST is now valid (create). PUT is not.
+	if rec := do(t, srv, http.MethodPut, "/api/storage/images", adminTok, ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("PUT images = %d, want 405", rec.Code)
+	}
+	if rec := do(t, srv, http.MethodDelete, "/api/storage/images", adminTok, ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("DELETE images = %d, want 405", rec.Code)
 	}
 }
 
