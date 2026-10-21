@@ -212,7 +212,8 @@ func (s *Server) handleStorageImageCreate(w http.ResponseWriter, r *http.Request
 }
 
 // handleStorageAssign serves POST /api/storage/assign (assign) and
-// DELETE /api/storage/assign/{clientID} (release). Admin only.
+// DELETE /api/storage/assign/{clientID} (release, preserves overlay). Admin only.
+// DELETE /api/storage/assign/{clientID}/overlay (discard, deletes overlay). Admin only.
 func (s *Server) handleStorageAssign(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
@@ -247,24 +248,56 @@ func (s *Server) handleStorageAssign(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"assignment": a})
 	case http.MethodDelete:
-		if !strings.HasPrefix(path, "/api/storage/assign/") {
-			writeError(w, http.StatusNotFound, "not found")
-			return
-		}
-		clientID := strings.TrimPrefix(path, "/api/storage/assign/")
-		if clientID == "" || strings.Contains(clientID, "/") {
-			writeError(w, http.StatusNotFound, "not found")
-			return
-		}
-		if err := s.storage.ReleaseAssignment(clientID); err != nil {
-			if errors.Is(err, errClientNotAssigned) {
-				writeError(w, http.StatusNotFound, err.Error())
+		if strings.HasPrefix(path, "/api/storage/assign/") {
+			rest := strings.TrimPrefix(path, "/api/storage/assign/")
+			if rest == "" {
+				writeError(w, http.StatusNotFound, "not found")
 				return
 			}
-			writeError(w, http.StatusBadRequest, err.Error())
+			// Check for /api/storage/assign/{clientID}/overlay (discard, deletes overlay).
+			if strings.HasSuffix(rest, "/overlay") {
+				clientID := strings.TrimSuffix(rest, "/overlay")
+				if clientID == "" || strings.Contains(clientID, "/") {
+					writeError(w, http.StatusNotFound, "not found")
+					return
+				}
+				if err := s.storage.DiscardAssignment(clientID); err != nil {
+					if errors.Is(err, errClientNotAssigned) {
+						writeError(w, http.StatusNotFound, err.Error())
+						return
+					}
+					if errors.Is(err, errBackendRequired) {
+						writeError(w, http.StatusServiceUnavailable, err.Error())
+						return
+					}
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"client_id": clientID, "discarded": true, "overlay_deleted": true})
+				return
+			}
+			// Plain release: /api/storage/assign/{clientID} (preserves overlay).
+			if strings.Contains(rest, "/") {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			clientID := rest
+			if err := s.storage.ReleaseAssignment(clientID); err != nil {
+				if errors.Is(err, errClientNotAssigned) {
+					writeError(w, http.StatusNotFound, err.Error())
+					return
+				}
+				if errors.Is(err, errBackendRequired) {
+					writeError(w, http.StatusServiceUnavailable, err.Error())
+					return
+				}
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"client_id": clientID, "released": true, "overlay_preserved": true})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"client_id": clientID, "released": true})
+		writeError(w, http.StatusNotFound, "not found")
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

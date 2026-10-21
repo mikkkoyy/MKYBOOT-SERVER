@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -151,6 +152,9 @@ func (b *FakeVHDXBackend) Remove(path string) error {
 	delete(b.files, path)
 	delete(b.attached, path)
 	delete(b.parents, path)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove vhdx %q: %w", path, err)
+	}
 	return nil
 }
 
@@ -831,5 +835,117 @@ func TestStorageConcurrentAssignVHDX(t *testing.T) {
 	}
 	if successes != 1 {
 		t.Errorf("expected exactly 1 successful assign under concurrency, got %d successes, %d conflicts", successes, conflicts)
+	}
+}
+
+func TestStorageReleasePreservesOverlay(t *testing.T) {
+	backend := newFakeBackend()
+	st, root := newTestStorageWithBackend(t, backend)
+
+	imgPath := filepath.Join(root, "base.vhdx")
+	_, _ = st.CreateImage("base-img", "Base Image", imgPath, ImageFormatVHDX, 1024)
+
+	// Assign client -> overlay file is created.
+	if _, err := st.AssignClient("client-1", "base-img"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	overlayPath := filepath.Join(root, "overlays", "client-1.avhdx")
+	if _, err := os.Stat(overlayPath); err != nil {
+		t.Fatalf("overlay should exist after assign: %v", err)
+	}
+
+	// Release -> overlay file is preserved.
+	if err := st.ReleaseAssignment("client-1"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, ok := st.GetAssignment("client-1"); ok {
+		t.Error("assignment should be cleared after release")
+	}
+	if _, err := os.Stat(overlayPath); err != nil {
+		t.Errorf("overlay should be preserved after release: %v", err)
+	}
+}
+
+func TestStorageDiscardDeletesOverlay(t *testing.T) {
+	backend := newFakeBackend()
+	st, root := newTestStorageWithBackend(t, backend)
+
+	imgPath := filepath.Join(root, "base.vhdx")
+	_, _ = st.CreateImage("base-img", "Base Image", imgPath, ImageFormatVHDX, 1024)
+
+	// Assign client -> overlay file is created.
+	if _, err := st.AssignClient("client-1", "base-img"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	overlayPath := filepath.Join(root, "overlays", "client-1.avhdx")
+	if _, err := os.Stat(overlayPath); err != nil {
+		t.Fatalf("overlay should exist after assign: %v", err)
+	}
+
+	// Discard -> overlay file is deleted.
+	if err := st.DiscardAssignment("client-1"); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, ok := st.GetAssignment("client-1"); ok {
+		t.Error("assignment should be cleared after discard")
+	}
+	if _, err := os.Stat(overlayPath); err == nil {
+		t.Error("overlay should be deleted after discard")
+	}
+}
+
+func TestStorageDiscardNotFound(t *testing.T) {
+	st, _ := newTestStorageWithBackend(t, newFakeBackend())
+	if err := st.DiscardAssignment("nope"); err == nil {
+		t.Error("discarding unknown client should fail")
+	}
+}
+
+func TestStorageDiscardThenReassign(t *testing.T) {
+	backend := newFakeBackend()
+	st, root := newTestStorageWithBackend(t, backend)
+
+	imgPath := filepath.Join(root, "base.vhdx")
+	_, _ = st.CreateImage("base-img", "Base Image", imgPath, ImageFormatVHDX, 1024)
+
+	// Assign, discard, re-assign -> should work.
+	if _, err := st.AssignClient("client-1", "base-img"); err != nil {
+		t.Fatalf("first assign: %v", err)
+	}
+	if err := st.DiscardAssignment("client-1"); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := st.AssignClient("client-1", "base-img"); err != nil {
+		t.Fatalf("re-assign after discard: %v", err)
+	}
+}
+
+func TestStorageDiscardAttachedOverlay(t *testing.T) {
+	backend := newFakeBackend()
+	st, root := newTestStorageWithBackend(t, backend)
+
+	imgPath := filepath.Join(root, "base.vhdx")
+	_, _ = st.CreateImage("base-img", "Base Image", imgPath, ImageFormatVHDX, 1024)
+
+	// Assign client -> overlay file created.
+	if _, err := st.AssignClient("client-1", "base-img"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	overlayPath := filepath.Join(root, "overlays", "client-1.avhdx")
+
+	// Attach overlay via backend.
+	if err := backend.Attach(overlayPath, false); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	// Discard -> detaches then deletes overlay.
+	if err := st.DiscardAssignment("client-1"); err != nil {
+		t.Fatalf("discard attached: %v", err)
+	}
+	if backend.isAttached(overlayPath) {
+		t.Error("overlay should be detached after discard")
+	}
+	if _, err := os.Stat(overlayPath); err == nil {
+		t.Error("overlay should be deleted after discard")
 	}
 }

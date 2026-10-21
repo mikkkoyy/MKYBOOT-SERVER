@@ -242,12 +242,16 @@ func TestStorageAssignAndRelease(t *testing.T) {
 		t.Errorf("client_id = %q, want %q", got.ClientID, "client-1")
 	}
 
-	// Release assignment.
+	// Release assignment - overlay file must be preserved (data safety).
+	overlayPath := filepath.Join(root, "overlays", "client-1.avhdx")
 	if err := st.ReleaseAssignment("client-1"); err != nil {
 		t.Fatalf("ReleaseAssignment: %v", err)
 	}
 	if _, ok := st.GetAssignment("client-1"); ok {
 		t.Error("released assignment should not be found")
+	}
+	if _, err := os.Stat(overlayPath); err != nil {
+		t.Errorf("overlay should be preserved after release: %v", err)
 	}
 
 	// Release unknown client is rejected.
@@ -482,10 +486,17 @@ func TestStorageAssignDeleteEndpoint(t *testing.T) {
 		t.Errorf("release without auth = %d, want 401", rec.Code)
 	}
 
-	// Successful release.
+	// Successful release preserves overlay.
 	rec := do(t, srv, http.MethodDelete, "/api/storage/assign/"+reg.ClientID, adminTok, "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("release status = %d, want 200", rec.Code)
+		t.Fatalf("release status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var releaseResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &releaseResp); err != nil {
+		t.Fatalf("decode release: %v", err)
+	}
+	if releaseResp["overlay_preserved"] != true {
+		t.Errorf("release should preserve overlay: %v", releaseResp)
 	}
 
 	// Release again -> not found.
@@ -498,6 +509,54 @@ func TestStorageAssignDeleteEndpoint(t *testing.T) {
 	rec = do(t, srv, http.MethodDelete, "/api/storage/assign/nonexistent", adminTok, "")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("release unknown = %d, want 404", rec.Code)
+	}
+}
+
+func TestStorageAssignDiscardEndpoint(t *testing.T) {
+	srv, adminTok := newTestStorageServer(t)
+	reg := registerClient(t, srv, "PC-DISCARD", "aa:bb:cc:00:00:52")
+
+	// Assign first.
+	body, _ := json.Marshal(map[string]string{"client_id": reg.ClientID, "image_id": "base-img"})
+	if rec := do(t, srv, http.MethodPost, "/api/storage/assign", adminTok, string(body)); rec.Code != http.StatusCreated {
+		t.Fatalf("pre-assign status = %d, want 201", rec.Code)
+	}
+
+	// Unauthorized discard.
+	if rec := do(t, srv, http.MethodDelete, "/api/storage/assign/"+reg.ClientID+"/overlay", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("discard without auth = %d, want 401", rec.Code)
+	}
+
+	// Successful discard deletes overlay.
+	rec := do(t, srv, http.MethodDelete, "/api/storage/assign/"+reg.ClientID+"/overlay", adminTok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("discard status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var discardResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &discardResp); err != nil {
+		t.Fatalf("decode discard: %v", err)
+	}
+	if discardResp["discarded"] != true || discardResp["overlay_deleted"] != true {
+		t.Errorf("discard should report overlay_deleted: %v", discardResp)
+	}
+
+	// Discard again -> not found.
+	rec = do(t, srv, http.MethodDelete, "/api/storage/assign/"+reg.ClientID+"/overlay", adminTok, "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("double discard = %d, want 404", rec.Code)
+	}
+
+	// Discard unknown client -> not found.
+	rec = do(t, srv, http.MethodDelete, "/api/storage/assign/nonexistent/overlay", adminTok, "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("discard unknown = %d, want 404", rec.Code)
+	}
+
+	// Assign after discard should work (fresh overlay).
+	body2, _ := json.Marshal(map[string]string{"client_id": reg.ClientID, "image_id": "base-img"})
+	rec = do(t, srv, http.MethodPost, "/api/storage/assign", adminTok, string(body2))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("re-assign after discard = %d, want 201 body=%s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -65,9 +65,11 @@ func (s *Storage) AssignClient(clientID, imageID string) (*ClientAssignment, err
 	return a, nil
 }
 
-// ReleaseAssignment removes the assignment for clientID, if any. The
-// differencing disk is detached (if attached) and deleted. The operation is
-// rejected if the overlay is currently attached and cannot be detached.
+// ReleaseAssignment removes the in-memory assignment for clientID, if any.
+// The differencing disk is detached (if attached) but the overlay file is
+// preserved so the client's persistent data is not destroyed. Use
+// DiscardAssignment to explicitly delete the overlay file when the client's
+// data should be discarded.
 func (s *Storage) ReleaseAssignment(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,7 +79,8 @@ func (s *Storage) ReleaseAssignment(clientID string) error {
 		return fmt.Errorf("%w: %q", errClientNotAssigned, clientID)
 	}
 
-	// If the overlay is attached, detach it first.
+	// If the overlay is attached, detach it first. The overlay file is kept
+	// intact so client writes survive release.
 	if s.backend != nil && s.backend.IsAvailable() {
 		attached, err := s.isAttached(a.OverlayPath)
 		if err != nil {
@@ -88,14 +91,45 @@ func (s *Storage) ReleaseAssignment(clientID string) error {
 				return fmt.Errorf("detach overlay for client %q: %w", clientID, err)
 			}
 		}
-		// Remove the differencing disk file.
+	}
+
+	delete(s.assignments, clientID)
+	s.log.Info("client image released (overlay preserved)", map[string]any{"client": clientID, "overlay": a.OverlayPath})
+	return nil
+}
+
+// DiscardAssignment removes the assignment for clientID and explicitly
+// deletes the client's writable overlay file. This is a destructive, explicit
+// reset/discard operation: the client's persistent data in the overlay is
+// lost. The operation is rejected if the overlay is attached and cannot be
+// detached.
+func (s *Storage) DiscardAssignment(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	a, exists := s.assignments[clientID]
+	if !exists {
+		return fmt.Errorf("%w: %q", errClientNotAssigned, clientID)
+	}
+
+	if s.backend != nil && s.backend.IsAvailable() {
+		attached, err := s.isAttached(a.OverlayPath)
+		if err != nil {
+			return fmt.Errorf("check attachment for client %q: %w", clientID, err)
+		}
+		if attached {
+			if err := s.backend.Detach(a.OverlayPath); err != nil {
+				return fmt.Errorf("detach overlay for client %q before discard: %w", clientID, err)
+			}
+		}
+		// Explicitly delete the differencing disk file.
 		if err := s.backend.Remove(a.OverlayPath); err != nil {
 			return fmt.Errorf("remove overlay for client %q: %w", clientID, err)
 		}
 	}
 
 	delete(s.assignments, clientID)
-	s.log.Info("client image released", map[string]any{"client": clientID})
+	s.log.Info("client image discarded (overlay deleted)", map[string]any{"client": clientID, "overlay": a.OverlayPath})
 	return nil
 }
 
