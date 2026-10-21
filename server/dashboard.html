@@ -14,6 +14,10 @@ pre{background:#111;color:#0f0;padding:10px;border-radius:4px;overflow:auto;max-
 </head>
 <body>
 <h1>MKYBOOT Server Dashboard</h1>
+<div class="card" id="loginCard">
+<b>Admin Token:</b> <input id="token" type="password" style="width:300px"> <button class="btn" onclick="login()">Login</button>
+<span id="loginStatus"></span>
+</div>
 <div class="card"><b>Health:</b> <span id="health">loading...</span></div>
 <div class="card"><b>Clients:</b><pre id="clients">loading...</pre></div>
 <div class="card"><b>Storage Health:</b><pre id="storage">loading...</pre></div>
@@ -21,7 +25,18 @@ pre{background:#111;color:#0f0;padding:10px;border-radius:4px;overflow:auto;max-
 <button class="btn" onclick="refresh()">Refresh</button>
 </div>
 <script>
-async function api(p){try{const r=await fetch(p);return await r.json();}catch(e){return {error:String(e)};}}
+function getToken(){return sessionStorage.getItem('mkyboot_token')||'';}
+async function api(p){
+  const t=getToken();
+  const opts=t?{headers:{'Authorization':'Bearer '+t}}:{};
+  try{const r=await fetch(p,opts);return await r.json();}catch(e){return {error:String(e)};}
+}
+function login(){
+  const v=document.getElementById('token').value;
+  sessionStorage.setItem('mkyboot_token',v);
+  document.getElementById('loginStatus').textContent='saved';
+  refresh();
+}
 async function refresh(){
   const h=await api('/healthz'); document.getElementById('health').textContent=JSON.stringify(h);
   const c=await api('/api/clients'); document.getElementById('clients').textContent=JSON.stringify(c,null,2);
