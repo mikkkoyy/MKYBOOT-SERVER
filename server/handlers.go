@@ -25,12 +25,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"service": "mkyboot-server",
-		"version": serverVersion,
-		"health":  "/healthz",
-		"admin":   "/api/clients (requires Bearer admin token)",
-	})
+	s.handleDashboard(w, r)
 }
 
 // handleCompatStatus mirrors the legacy /?api=status contract consumed by the
