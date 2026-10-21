@@ -23,12 +23,13 @@ const heartbeatOfflineAfter = 90 * time.Second
 
 // Server wires configuration, persistent state, admin auth and the HTTP API.
 type Server struct {
-	cfg   Config
-	state *state
-	admin *adminStore
-	log   *Logger
-	http  *http.Server
-	ln    net.Listener
+	cfg     Config
+	state   *state
+	admin   *adminStore
+	storage *Storage
+	log     *Logger
+	http    *http.Server
+	ln      net.Listener
 }
 
 // NewServer builds the server. It loads or initializes persistent state and
@@ -49,7 +50,18 @@ func NewServer(cfg Config, log *Logger) (*Server, string, error) {
 		return nil, "", fmt.Errorf("provision admin token: %w", err)
 	}
 
-	s := &Server{cfg: cfg, state: st, admin: admin, log: log}
+	// Initialize the storage subsystem. The root defaults to
+	// <data-root>/images when not explicitly configured.
+	storageRoot := cfg.Storage.Root
+	if storageRoot == "" {
+		storageRoot = filepath.Join(ProgramDataRoot(), "images")
+	}
+	stg, err := NewStorage(storageRoot, log)
+	if err != nil {
+		return nil, "", fmt.Errorf("storage init: %w", err)
+	}
+
+	s := &Server{cfg: cfg, state: st, admin: admin, storage: stg, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/clients", s.handleClients) // GET list, POST register
@@ -58,6 +70,11 @@ func NewServer(cfg Config, log *Logger) (*Server, string, error) {
 	mux.HandleFunc("/api/session/", s.handleSession)   // /api/session/{id}
 	mux.HandleFunc("/api/bootstate", s.handleBootState)
 	mux.HandleFunc("/api/bootscript", s.handleBootScript)
+	mux.HandleFunc("/api/storage/health", s.handleStorageHealth)
+	mux.HandleFunc("/api/storage/images", s.handleStorageImages)  // GET list
+	mux.HandleFunc("/api/storage/images/", s.handleStorageImages) // GET /api/storage/images/{id}
+	mux.HandleFunc("/api/storage/assign", s.handleStorageAssign)  // POST assign
+	mux.HandleFunc("/api/storage/assign/", s.handleStorageAssign) // DELETE /api/storage/assign/{clientID}
 	mux.HandleFunc("/", s.handleRoot)
 
 	s.http = &http.Server{

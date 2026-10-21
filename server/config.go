@@ -31,6 +31,16 @@ type Config struct {
 	// default to disabled so nothing binds a network port unless an operator
 	// explicitly enables it for an isolated lab.
 	PXE PXEConfig `json:"pxe"`
+	// Storage holds the image storage settings. The storage root defaults to
+	// <data-root>/images and is created with restrictive permissions.
+	Storage StorageConfig `json:"storage"`
+}
+
+// StorageConfig configures the image storage subsystem. The root directory
+// contains base images and per-client overlay reserves.
+type StorageConfig struct {
+	Enabled bool   `json:"enabled"` // whether the storage subsystem is active
+	Root    string `json:"root"`    // image storage root; defaults to <data-root>/images
 }
 
 // PXEConfig groups the network-boot services. Everything is opt-in.
