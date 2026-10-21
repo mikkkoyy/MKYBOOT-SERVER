@@ -1,26 +1,38 @@
 {
   "bind_address": "127.0.0.1",
   "bind_port": 8888,
+  "log_dir": "D:/MKYBOOT-Lab/Logs",
   "pxe": {
     "tftp": {
       "enabled": true,
-      "bind_address": "198.51.100.2",
+      "bind_address": "192.168.56.1",
       "bind_port": 69,
       "root": "D:/project/diskless+timer/diskless/srv/tftp"
     },
     "dhcp": {
       "enabled": true,
-      "bind_address": "198.51.100.2",
+      "bind_address": "192.168.56.1",
       "bind_port": 67,
-      "subnet": "198.51.100.0/24",
-      "range_start": "198.51.100.50",
-      "range_end": "198.51.100.70",
+      "subnet": "192.168.56.0/24",
+      "range_start": "192.168.56.100",
+      "range_end": "192.168.56.150",
       "lease_seconds": 3600,
-      "gateway": "198.51.100.1",
-      "dns_server": "198.51.100.1",
-      "next_server": "198.51.100.2",
+      "gateway": "192.168.56.1",
+      "dns_server": "192.168.56.1",
+      "next_server": "192.168.56.1",
       "boot_file_uefi": "ipxe.efi",
       "boot_file_bios": "ipxe.kpxe"
+    }
+  },
+  "storage": {
+    "enabled": true,
+    "root": "D:/MKYBOOT-Lab/Storage/images",
+    "iscsi": {
+      "enabled": false,
+      "host": "192.168.56.10",
+      "port": 22,
+      "user": "mkyboot",
+      "key_path": "D:/MKYBOOT-Lab/VMs/MKYBOOT-Ubuntu/keys/mkyboot_ed25519"
     }
   }
 }

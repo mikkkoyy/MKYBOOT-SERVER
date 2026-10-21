@@ -113,7 +113,7 @@ Run in an **elevated** PowerShell. SVM is ready only when `VirtualizationFirmwar
     Select-String "Default machine folder"                        # -> D:\MKYBOOT-Lab\VMs
 
 # 4. Lab folders exist
-"D:\MKYBOOT-Lab","D:\MKYBOOT-Lab\VMs","D:\MKYBOOT-Lab\ISO","D:\MKYBOOT-Lab\Files" |
+"D:\MKYBOOT-Lab","D:\MKYBOOT-Lab\VMs","D:\MKYBOOT-Lab\ISOs","D:\MKYBOOT-Lab\Files" |
     ForEach-Object { "$_ : $(Test-Path $_)" }                     # -> all True
 
 # 5. Free space on C: and D:
@@ -193,7 +193,7 @@ $VMs = "D:\MKYBOOT-Lab\VMs"
 # For UEFI testing also run: & $VBM modifyvm mkyboot-client --firmware efi
 ```
 
-Install Ubuntu Server from an official ISO in `D:\MKYBOOT-Lab\ISO\` (download from `ubuntu.com`; verify its checksum). Configure the server VM's lab NIC with the static address from `docs/PHASE4A_PXE_TEST_NETWORK.md` (e.g. `198.51.100.2/24`).
+Install Ubuntu Server from an official ISO in `D:\MKYBOOT-Lab\ISOs\` (download from `ubuntu.com`; verify its checksum). Configure the server VM's lab NIC with the static address from `docs/PHASE4A_PXE_TEST_NETWORK.md` (e.g. `198.51.100.2/24`).
 
 ### 4.6 Ubuntu installation and MKYBOOT deployment prerequisites (inside the server VM)
 
@@ -232,7 +232,7 @@ $VBM = "D:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
 & $VBM controlvm mkyboot-server poweroff -ErrorAction SilentlyContinue
 & $VBM unregistervm mkyboot-client --delete      # deletes its disks under D:\MKYBOOT-Lab\VMs
 & $VBM unregistervm mkyboot-server --delete
-Remove-Item -Recurse -Force D:\MKYBOOT-Lab\VMs\*, D:\MKYBOOT-Lab\ISO\* -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force D:\MKYBOOT-Lab\VMs\*, D:\MKYBOOT-Lab\ISOs\* -ErrorAction SilentlyContinue
 ```
 
 **Recovery / rollback of the VirtualBox install (only if needed, operator-approved):**

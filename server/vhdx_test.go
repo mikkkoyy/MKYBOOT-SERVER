@@ -219,7 +219,7 @@ func newTestStorageWithBackend(t *testing.T, backend VHDXBackend) (*Storage, str
 	t.Helper()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "images")
-	st, err := NewStorage(root, NewLogger(io.Discard))
+	st, err := NewStorage(root, NewLogger(io.Discard), ISCSIConfig{})
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}

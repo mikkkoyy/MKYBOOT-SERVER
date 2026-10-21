@@ -125,7 +125,7 @@ type Storage struct {
 // NewStorage creates a storage backend rooted at root. The root is created
 // with restrictive permissions if missing. The VHDX backend is auto-detected;
 // capabilities are set according to what the backend actually supports.
-func NewStorage(root string, log *Logger) (*Storage, error) {
+func NewStorage(root string, log *Logger, iscsiCfg ISCSIConfig) (*Storage, error) {
 	if log == nil {
 		log = NewLogger(io.Discard)
 	}
@@ -137,8 +137,8 @@ func NewStorage(root string, log *Logger) (*Storage, error) {
 		return nil, fmt.Errorf("storage root %q: %w", abs, err)
 	}
 
-	iscsiBackend, err := DetectiSCSIBackend()
-	if err != nil {
+	iscsiBackend, iscsiErr := DetectiSCSIBackend(iscsiCfg)
+	if iscsiErr != nil {
 		iscsiBackend = nil
 	}
 
@@ -172,6 +172,9 @@ func NewStorage(root string, log *Logger) (*Storage, error) {
 		s.log.Info("iSCSI target backend detected", map[string]any{"backend": iscsiBackend.Name(), "available": iscsiBackend.IsAvailable()})
 	} else {
 		s.log.Info("no iSCSI target backend available", map[string]any{"iscsi": false})
+	}
+	if iscsiErr != nil {
+		s.log.Error("iSCSI target backend rejected the configuration", map[string]any{"error": iscsiErr.Error()})
 	}
 	return s, nil
 }

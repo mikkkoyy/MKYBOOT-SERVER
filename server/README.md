@@ -1,19 +1,21 @@
-# MKYBOOT Windows-Native Server (Phase 2 — Foundation)
+# MKYBOOT Windows-Native Server
 
-A native Windows diskless-boot **server foundation** written in Go. This is
-Phase 2 of the Windows-native migration described in
+A native Windows diskless-boot **server foundation** written in Go. This is the
+Windows-native migration described in
 [`../docs/WINDOWS_DISKLESS_MIGRATION.md`](../docs/WINDOWS_DISKLESS_MIGRATION.md).
 
-**Scope of this milestone:** it runs as a Windows console app or Windows
-service and provides the server backbone — configuration, structured logging,
-a health endpoint, an authenticated admin API, client registration and
-heartbeat with online/offline status, a **server-side session timer**, and an
-**authoritative lock/unlock state model** — with persistence across restarts.
+**Scope:** it runs as a Windows console app or Windows service and provides the
+server backbone — configuration, structured logging, a health endpoint, an
+authenticated admin API, client registration and heartbeat with online/offline
+status, a **server-side session timer**, and an **authoritative lock/unlock
+state model** — with persistence across restarts. It also provides the
+**network-boot delivery services** (TFTP + DHCP, both opt-in) and the
+**iSCSI target management** layer (opt-in, SSH-driven).
 
-**It does NOT** start DHCP, TFTP, iSCSI, or any PXE/network-boot service, and
-it does **not** implement diskless boot, VHDX overlays, or the Windows client
-agent. Those are later milestones. A working health/API endpoint is **not**
-proof of diskless boot.
+It does **not** implement diskless boot, VHDX overlays, or the Windows client
+agent. A working health/API endpoint is **not** proof of diskless boot, and the
+iSCSI capability flag stays `false` until a real target passes loopback
+verification.
 
 ## Requirements
 
@@ -55,6 +57,9 @@ First run creates `%ProgramData%\MKYBOOT\` with:
 - `state.json` — persisted clients + lock/session state (owner-only)
 - `mkyboot-server.log` — structured JSON logs
 
+The log file honours the `log_dir` configuration key, so it can be kept on a
+different volume than the rest of the data root.
+
 On first run the server **generates** an administrator token and prints it
 **once** to stderr. Save it — it is never shown or logged again. To provision
 a known token non-interactively instead, set the environment variable before
@@ -86,9 +91,71 @@ $env:MKYBOOT_DATA_DIR = "$env:TEMP\mkyboot-dev"
 | `POST /api/client/{id}/lock` \| `/unlock` | **admin** | Set authoritative lock state |
 | `POST /api/session/{id}` | **admin** | Start a session timer (`{"minutes":N}`) |
 | `DELETE /api/session/{id}` | **admin** | End the session timer |
+| `GET /api/storage/health` | **admin** | Storage backend capabilities + iSCSI state |
+| `POST /api/storage/images` | **admin** | Register a base image |
+| `POST /api/storage/assign` | **admin** | Assign an overlay to a client |
+| `GET /api/storage/iscsi/health` | **admin** | iSCSI target backend state + exported targets |
+| `GET /api/storage/iscsi/targets` | **admin** | List exported iSCSI targets |
+| `POST /api/storage/iscsi/luns` | **admin** | Create a LUN (`{"path":...,"size_mb":N}`) |
+| `DELETE /api/storage/iscsi/luns/` | **admin** | Remove a LUN (`{"path":...}`) |
+| `POST /api/storage/iscsi/export` | **admin** | Export a LUN (`{"iqn":...,"path":...,"size_mb":N}`) |
+| `DELETE /api/storage/iscsi/export/` | **admin** | Unexport a target (`{"iqn":...}`) |
+| `POST /api/storage/iscsi/acl` | **admin** | Restrict a target to initiator IQNs |
+| `POST /api/storage/iscsi/verify` | **admin** | Loopback-verify a target |
 
 Authentication uses `Authorization: Bearer <token>`. The admin token and
 per-client tokens are compared in constant time.
+
+## Network boot services (TFTP + DHCP)
+
+Both services are **opt-in and off by default**. They bind only to an explicit
+unicast address (never `0.0.0.0`), so the server cannot accidentally answer
+DHCP on a production LAN. Validate the configuration without opening any
+socket:
+
+```powershell
+.\dist\mkyboot-server.exe -config D:\MKYBOOT-Lab\config.json -dry-run
+```
+
+When enabled, the server binds UDP 69 (TFTP) and UDP 67 (DHCP) on the
+configured `bind_address`, and the DHCP server answers only inside the
+configured `subnet`/`range_start`/`range_end`.
+
+## iSCSI target management
+
+The iSCSI target itself runs on a **separate Linux VM** (LIO/`targetcli`).
+The Windows server only issues management commands to it over SSH.
+
+```json
+"storage": {
+  "enabled": true,
+  "root": "D:/MKYBOOT-Lab/Storage/images",
+  "iscsi": {
+    "enabled": true,
+    "host": "192.168.56.10",
+    "port": 22,
+    "user": "mkyboot",
+    "key_path": "D:/MKYBOOT-Lab/VMs/MKYBOOT-Ubuntu/keys/mkyboot_ed25519"
+  }
+}
+```
+
+- `enabled` defaults to `false`. When disabled — or when `host`, `user` or
+  `key_path` is missing — the backend reports itself unavailable and every
+  management call fails closed.
+- The SSH session is non-interactive (`BatchMode`), does not forward the agent
+  or X11, and uses `StrictHostKeyChecking=yes`. The host key must already be
+  trusted in `known_hosts`.
+- The CHAP secret is sent on the remote shell's **standard input**, never as a
+  command argument, so it does not appear in the remote process table. It is
+  never logged.
+- `POST /api/storage/iscsi/verify` performs a **loopback iSCSI discovery**
+  (`iscsiadm --mode discovery`) on the target host. Only after that succeeds
+  does the state become `verified`.
+
+> The `iscsi` capability flag in `/api/storage/health` is hard-coded `false`.
+> It is **not** flipped by configuration; it stays false until a real target
+> has been verified on real hardware.
 
 ## Security model
 
@@ -143,15 +210,20 @@ session start/end + invalid duration, **server-authoritative expiry forcing a
 lock**, request body size limit, persistence across a simulated restart, and
 owner-only file permissions.
 
-## Phase 2 status
+## Current status
 
-**Complete (foundation):** config, structured logging, health, authenticated
-admin API, client registry + heartbeat, session timer, authoritative lock
-state, persistence, graceful shutdown, Windows service lifecycle, unit tests,
-Windows AMD64 build.
+**Implemented and unit-tested:** config, structured logging, health,
+authenticated admin API, client registry + heartbeat, session timer,
+authoritative lock state, persistence, graceful shutdown, Windows service
+lifecycle, TFTP server (RFC 1350), DHCP server (isolated-lab only), VHDX image
+management, and SSH-driven iSCSI target management against a remote Linux
+LIO/targetcli host.
 
-**Not in this milestone (separate phases):** PXE/DHCP/TFTP, iSCSI target,
-VHDX differencing disks and write-back isolation, the Windows client agent,
-and any real diskless boot. Those remain **BLOCKED / not implemented** and are
-tracked in the migration plan.
+**Not implemented / not proven:** diskless boot itself, VHDX differencing
+overlay write-back isolation, and the Windows client agent. The iSCSI
+capability flag remains `false` and the iSCSI layer has **not** yet been
+exercised against a live Ubuntu target — see
+[`../docs/PHASE4F_UBUNTU_ISCSI_INTEGRATION.md`](../docs/PHASE4F_UBUNTU_ISCSI_INTEGRATION.md)
+for the acceptance sequence. A passing unit test is **not** proof of diskless
+boot.
 

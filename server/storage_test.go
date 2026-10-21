@@ -14,7 +14,7 @@ func newTestStorage(t *testing.T) (*Storage, string) {
 	t.Helper()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "images")
-	st, err := NewStorage(root, NewLogger(io.Discard))
+	st, err := NewStorage(root, NewLogger(io.Discard), ISCSIConfig{})
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}

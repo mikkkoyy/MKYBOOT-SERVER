@@ -31,3 +31,6 @@ desktop.ini
 # Launcher build output
 /launcher/dist/
 
+# Stray Go build output at the repository root
+/server.exe
+

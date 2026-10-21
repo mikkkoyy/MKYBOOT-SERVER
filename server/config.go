@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -27,6 +28,7 @@ type Config struct {
 	// LogDir is where the structured log file is written. Empty means the
 	// data root.
 	LogDir string `json:"log_dir,omitempty"`
+
 	// PXE holds the TFTP and DHCP settings for network boot delivery. Both
 	// default to disabled so nothing binds a network port unless an operator
 	// explicitly enables it for an isolated lab.
@@ -138,6 +140,17 @@ func (c *Config) Validate() error {
 
 // Addr returns the host:port listen address.
 func (c Config) Addr() string { return net.JoinHostPort(c.BindAddress, strconv.Itoa(c.BindPort)) }
+
+// LogFilePath returns the structured log file path for this configuration.
+//
+// When LogDir is set it takes precedence over the data root, so the log can
+// be kept on a different volume than the rest of the data root.
+func (c Config) LogFilePath() string {
+	if c.LogDir != "" {
+		return filepath.Join(c.LogDir, "mkyboot-server.log")
+	}
+	return DefaultLogPath()
+}
 
 // LoadConfig reads config from path. A missing file yields defaults with no
 // error; a corrupt or invalid file yields defaults together with an error the

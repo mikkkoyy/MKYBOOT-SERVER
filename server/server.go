@@ -56,7 +56,7 @@ func NewServer(cfg Config, log *Logger) (*Server, string, error) {
 	if storageRoot == "" {
 		storageRoot = filepath.Join(ProgramDataRoot(), "images")
 	}
-	stg, err := NewStorage(storageRoot, log)
+	stg, err := NewStorage(storageRoot, log, cfg.Storage.ISCSI)
 	if err != nil {
 		return nil, "", fmt.Errorf("storage init: %w", err)
 	}

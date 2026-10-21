@@ -2,6 +2,17 @@
 
 **Status: Lab VMs created and network isolation verified. No PXE acceptance is claimed.**
 
+> **Superseded in part by Phase 4F.** The Internal Network `mkyboot` described
+> in §3 and §6 below has **no path to the Windows host**, so the
+> Windows-native MKYBOOT server could neither reach the Ubuntu VM for iSCSI
+> target management nor bind DHCP/TFTP for the client. Phase 4F therefore
+> re-attached both VM NICs to the pre-existing VirtualBox **Host-Only**
+> adapter (`192.168.56.1/24`), which is still isolated from the production LAN
+> (`30.0.0.0/24`) and required **no** Windows adapter or route change. The
+> authoritative topology, addressing and acceptance sequence are in
+> `docs/PHASE4F_UBUNTU_ISCSI_INTEGRATION.md`. The Phase 4D text is retained
+> as the record of what was built in Phase 4D.
+
 AMD SVM has now been enabled in firmware (`VirtualizationFirmwareEnabled = True`, and VirtualBox reports `Processor supports HW virtualization: yes`), which unblocks the local VirtualBox path that was blocked in Phase 4C. This document records the read-only host inspection, the VirtualBox verification, the created isolated network, and the exact specifications of the two VMs, and lists the remaining operator steps. It reuses `docs/PHASE4A_PXE_TEST_NETWORK.md` (topology + acceptance sequence) and `docs/PHASE4C_LAB_SETUP_READINESS.md` (dependency checklist) rather than replacing them. **No application code was changed. No DHCP/TFTP/iSCSI service was started.**
 
 | Repository | Branch | Commit |
@@ -95,15 +106,15 @@ Keep the DHCP subnet, `next-server`, `srv/cfg/mkyboot.json` client IPs/MACs, TFT
 
 ## 7. Ubuntu Server ISO
 
-**Status: NOT RUN / BLOCKED — awaiting operator authorization to download.** The ISO folder `D:\MKYBOOT-Lab\ISO` is empty and no ISO has been downloaded.
+**Status: DONE (Phase 4F).** The ISO was downloaded to `D:\MKYBOOT-Lab\ISOs\ubuntu-22.04.5-live-server-amd64.iso` and its SHA256 was verified against the official `SHA256SUMS` (`9bc6028870aef3f74f4e16b900008179e78b130e6b0b9a140635434a46aa98b0`, match confirmed). It is attached to the Ubuntu VM's optical drive and is **never committed to the repository**.
 
 - The project documents **Ubuntu 20.04 or 22.04** as compatible, and CI runs on `ubuntu-22.04`. Use **Ubuntu Server 22.04 LTS** (64-bit).
 - Official download location: `https://ubuntu.com/download/server` → **Install Ubuntu Server** → `https://releases.ubuntu.com/22.04/` (live-server ISO `ubuntu-22.04.x-live-server-amd64.iso`). Verify the SHA256 from `SHA256SUMS`.
-- **Do not download until the operator authorizes it.** Once authorized, save it to `D:\MKYBOOT-Lab\ISO\`, then attach it to the Ubuntu VM's optical drive and install onto the 35 GB system disk. This ISO is **never committed to the repository.**
+- **Do not download until the operator authorizes it.** Once authorized, save it to `D:\MKYBOOT-Lab\ISOs\`, then attach it to the Ubuntu VM's optical drive and install onto the 35 GB system disk. This ISO is **never committed to the repository.**
 
 ## 8. Next steps (operator) — none performed automatically
 
-1. Authorize the Ubuntu Server 22.04 LTS ISO download (§7); save to `D:\MKYBOOT-Lab\ISO\`.
+1. Authorize the Ubuntu Server 22.04 LTS ISO download (§7); save to `D:\MKYBOOT-Lab\ISOs\`.
 2. Attach the ISO, boot `MKYBOOT-Ubuntu`, and install Ubuntu onto the 35 GB system disk. During install, only the lab NIC needs the static `198.51.100.2/24`.
 3. Inside the VM run the read-only checks first: `bash tools/linux/phase4a-host-check.sh`, then static validation (`bash -n install.sh`, `bash tools/linux/check-pxe-assets.sh`, `nginx -t`, `dhcpd -t -cf <generated test dhcpd.conf>`, Lua tests).
 4. Identify the 25 GB disk (§5) and create a **disposable, empty** ZFS test pool on it only.
@@ -126,7 +137,7 @@ Keep the DHCP subnet, `next-server`, `srv/cfg/mkyboot.json` client IPs/MACs, TFT
 | VirtualBox verification | **PASS** | `7.2.20r175154`, default folder on `D:` |
 | VM creation | **PASS** | Both VMs created on `D:`, no duplicates |
 | Internal network | **PASS** | `mkyboot`, no uplink/NAT/bridge |
-| Ubuntu ISO | **NOT RUN / BLOCKED** | Not present; awaiting download authorization |
+| Ubuntu ISO | **PASS (Phase 4F)** | `ubuntu-22.04.5-live-server-amd64.iso` in `D:\MKYBOOT-Lab\ISOs\`, SHA256 verified, attached to the Ubuntu VM optical drive |
 | Storage identification | **PASS (lab-level)** | 25 GB disk created as SATA port 1; in-guest identity still to confirm before any pool |
 | Client isolation | **PASS** | Diskless client, intnet only, no NAT/bridge |
 | Production network safety | **PASS** | `30.0.0.55/24` untouched; host-only not attached |

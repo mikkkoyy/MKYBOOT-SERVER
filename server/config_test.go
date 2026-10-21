@@ -98,6 +98,21 @@ func TestConfigInvalidValueFallsBack(t *testing.T) {
 	}
 }
 
+func TestConfigLogFilePath(t *testing.T) {
+	t.Setenv("MKYBOOT_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	c := DefaultConfig()
+	if got, want := c.LogFilePath(), DefaultLogPath(); got != want {
+		t.Errorf("LogFilePath() = %q, want %q", got, want)
+	}
+
+	c.LogDir = "D:/MKYBOOT-Lab/Logs"
+	want := filepath.Join("D:/MKYBOOT-Lab/Logs", "mkyboot-server.log")
+	if got := c.LogFilePath(); got != want {
+		t.Errorf("LogFilePath() = %q, want %q", got, want)
+	}
+}
+
 func TestConfigPersistsNoSecrets(t *testing.T) {
 	c := DefaultConfig()
 	dir := t.TempDir()

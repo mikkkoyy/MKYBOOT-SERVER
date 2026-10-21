@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -211,7 +212,7 @@ func newTestStorageWithISCSIBackend(t *testing.T, backend iSCSITargetBackend) (*
 	t.Helper()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "images")
-	st, err := NewStorage(root, NewLogger(io.Discard))
+	st, err := NewStorage(root, NewLogger(io.Discard), ISCSIConfig{})
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -661,5 +662,105 @@ func TestISCSIConcurrentExport(t *testing.T) {
 	}
 	if successes != 1 {
 		t.Errorf("expected exactly 1 successful export of same LUN, got %d", successes)
+	}
+}
+
+// ---- SSH backend logic tests ----
+
+func TestValidateLinuxPath(t *testing.T) {
+	valid := []string{
+		"/mnt/iscsi/lun1.img",
+		"/var/lib/target/store/disk0",
+		"/srv/iscsi/images/base.vhdx",
+	}
+	for _, p := range valid {
+		if !validateLinuxPath(p) {
+			t.Errorf("validateLinuxPath(%q) = false, want true", p)
+		}
+	}
+	invalid := []string{
+		"",
+		"relative/path.img",
+		"/path/with/../traversal",
+		"/path/with|pipe",
+		"/path/with;rm",
+		"/path/with$var",
+		"/path/with`cmd`",
+		"/path/with<script",
+	}
+	for _, p := range invalid {
+		if validateLinuxPath(p) {
+			t.Errorf("validateLinuxPath(%q) = true, want false", p)
+		}
+	}
+}
+
+func TestSafeTargetName(t *testing.T) {
+	if got := safeTargetName("iqn.2026-10.com.example:storage.disk1"); got != "iqn.2026-10.com.example_storage.disk1" {
+		t.Errorf("safeTargetName(iqn) = %q, want %q", got, "iqn.2026-10.com.example_storage.disk1")
+	}
+	if got := safeTargetName("/mnt/iscsi/lun1.img"); got != "_mnt_iscsi_lun1.img" {
+		t.Errorf("safeTargetName(path) = %q, want %q", got, "_mnt_iscsi_lun1.img")
+	}
+	if got := safeTargetName(""); got == "" {
+		t.Error("safeTargetName(empty) should not be empty")
+	}
+	// No shell metacharacters ever appear.
+	for _, s := range []string{"a|b", "c;d", "e$f", "g`h`", "i<j", "k>l", "m&n", "o'p", "q\"r"} {
+		name := safeTargetName(s)
+		if strings.ContainsAny(name, "|;$(){}[]<>\"'`\\") {
+			t.Errorf("safeTargetName(%q) = %q contains metacharacters", s, name)
+		}
+	}
+}
+
+func TestParseTargetcliTargets(t *testing.T) {
+	out := `
+/iscsi
+    iqn.2026-10.com.example:storage.disk1
+        tpg1
+            luns
+                lun0 -> /backstores/fileio/lun1
+            acls
+    iqn.2026-10.com.example:storage.disk2
+        tpg1
+            luns
+                lun0 -> /backstores/fileio/lun2
+`
+	targets := parseTargetcliTargets(out)
+	if len(targets) != 2 {
+		t.Errorf("expected 2 targets, got %d", len(targets))
+	}
+	if targets[0].IQN != "iqn.2026-10.com.example:storage.disk1" {
+		t.Errorf("target[0].IQN = %q, want %q", targets[0].IQN, "iqn.2026-10.com.example:storage.disk1")
+	}
+	if targets[1].IQN != "iqn.2026-10.com.example:storage.disk2" {
+		t.Errorf("target[1].IQN = %q, want %q", targets[1].IQN, "iqn.2026-10.com.example:storage.disk2")
+	}
+	for _, tt := range targets {
+		if !tt.Exported {
+			t.Errorf("target %q should be exported", tt.IQN)
+		}
+	}
+}
+
+func TestParseTargetcliTargetsEmpty(t *testing.T) {
+	targets := parseTargetcliTargets("")
+	if len(targets) != 0 {
+		t.Errorf("expected 0 targets, got %d", len(targets))
+	}
+}
+
+func TestParseTargetcliACLs(t *testing.T) {
+	out := `
+    iqn.2026-10.com.client:initiator1
+    iqn.2026-10.com.client:initiator2
+`
+	acls := parseTargetcliACLs(out)
+	if len(acls) != 2 {
+		t.Errorf("expected 2 ACLs, got %d", len(acls))
+	}
+	if acls[0] != "iqn.2026-10.com.client:initiator1" {
+		t.Errorf("acl[0] = %q, want %q", acls[0], "iqn.2026-10.com.client:initiator1")
 	}
 }

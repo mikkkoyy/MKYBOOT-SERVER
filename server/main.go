@@ -95,7 +95,7 @@ func run(args []string) int {
 		_ = cfg.Save(*configPath)
 	}
 
-	logger, err := NewFileLogger(DefaultLogPath())
+	logger, err := NewFileLogger(cfg.LogFilePath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot open log file: %v\n", err)
 		return 1
