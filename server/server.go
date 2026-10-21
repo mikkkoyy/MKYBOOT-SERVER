@@ -165,6 +165,11 @@ func (s *Server) recoverMiddleware(next http.Handler) http.Handler {
 // It uses a constant-time comparison and returns false (after writing the
 // response) when unauthorized.
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	// Loopback (local) requests are trusted for the default local-only setup.
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+		return true
+	}
 	tok := bearerToken(r)
 	if tok == "" || !s.admin.Verify(tok) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
